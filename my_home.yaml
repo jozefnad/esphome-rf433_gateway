@@ -12,7 +12,7 @@ esphome:
   on_boot:
     priority: -100
     then:
-      - cc1101.begin_rx
+      - lambda: 'id(mycc1101).recv();'
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -69,7 +69,7 @@ ota:
   password: !secret ota_password
   on_begin:
     then:
-      - cc1101.set_idle
+      - lambda: 'id(mycc1101).standby();'
 
 captive_portal:
 
@@ -78,22 +78,24 @@ status_led:
     number: GPIO8
     inverted: true
 
-# ─── SPI & CC1101 (built-in ESPHome component) ────────────────────────────
+# ─── SPI & CC1101 (RadioLib external component) ───────────────────────────
 spi:
   clk_pin: $clk
   mosi_pin: $mosi
   miso_pin: $miso
 
-cc1101:
+radiolib_cc1101:
   id: mycc1101
   cs_pin: $cs
-  gdo0_pin:
+  rx_pin:
     number: $gdo0
     allow_other_uses: true
-  frequency: 433.92MHz
-  modulation_type: ASK/OOK
-  output_power: 10
-  filter_bandwidth: 540kHz
+  frequency: 433.92mhz
+  filter: 540khz
+  bitrate: 2.4
+  reg_agcctrl2: 0x43
+  reg_agcctrl1: 0x40
+  reg_agcctrl0: 0x91
 
 # ─── Remote Receiver (CC1101 GDO0) ────────────────────────────────────────
 remote_receiver:
@@ -108,7 +110,7 @@ remote_receiver:
         open_drain: false
     dump:
       - dooya
-      - raw  # dočasne pre diagnostiku Nexus/TE81
+      # - raw  # odkomentovať pre diagnostiku
     idle: 7ms
     filter: 100us
     tolerance: 40%
@@ -129,13 +131,15 @@ remote_transmitter:
     non_blocking: false
     on_transmit:
       then:
-        - cc1101.begin_tx
+        - lambda: 'id(mycc1101).xmit();'
     on_complete:
       then:
-        - cc1101.begin_rx
+        - lambda: 'id(mycc1101).recv();'
 
 # ─── RF433 Gateway Component ──────────────────────────────────────────────
 external_components:
+  - source: github://juanboro/esphome-radiolib-cc1101@main
+    components: [radiolib_cc1101]
   - source:
       type: git
       url: https://github.com/jozefnad/esphome-rf433_gateway

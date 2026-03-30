@@ -8,6 +8,10 @@
 esphome:
   name: rf433-gateway-example
   friendly_name: RF433 Gateway Example
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'id(mycc1101).recv();'
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -24,22 +28,29 @@ logger:
 api:
 ota:
   platform: esphome
+  on_begin:
+    then:
+      - lambda: 'id(mycc1101).standby();'
 captive_portal:
 
-# ─── SPI & CC1101 ──────────────────────────────────────────────────────────
+# ─── SPI & CC1101 (RadioLib) ────────────────────────────────────────────
 spi:
   clk_pin: GPIO4
   mosi_pin: GPIO6
   miso_pin: GPIO5
 
-cc1101:
+radiolib_cc1101:
+  id: mycc1101
   cs_pin: GPIO7
-  gdo0_pin:
+  rx_pin:
     number: GPIO3
     allow_other_uses: true
-  frequency: 433.92MHz
-  modulation_type: ASK/OOK
-  output_power: 10
+  frequency: 433.92mhz
+  filter: 540khz
+  bitrate: 2.4
+  reg_agcctrl2: 0x43
+  reg_agcctrl1: 0x40
+  reg_agcctrl0: 0x91
 
 # ─── Remote Receiver ───────────────────────────────────────────────────────
 remote_receiver:
@@ -73,13 +84,15 @@ remote_transmitter:
     non_blocking: false
     on_transmit:
       then:
-        - cc1101.begin_tx
+        - lambda: 'id(mycc1101).xmit();'
     on_complete:
       then:
-        - cc1101.begin_rx
+        - lambda: 'id(mycc1101).recv();'
 
 # ─── RF433 Gateway Component ──────────────────────────────────────────────
 external_components:
+  - source: github://juanboro/esphome-radiolib-cc1101@main
+    components: [radiolib_cc1101]
   - source:
       type: local
       path: components

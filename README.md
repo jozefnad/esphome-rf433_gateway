@@ -31,8 +31,8 @@ GPIO8  ────────────────  —      (Status LED, a
 
 > ⚠️ CC1101 is a 3.3V device. Never connect VCC to 5V.
 
-The single-pin (GDO0) configuration uses the built-in `cc1101` component's `gdo0_pin`
-option for automatic TX/RX mode switching. No manual pin manipulation needed.
+The single-pin (GDO0) configuration uses RadioLib's `radiolib_cc1101` external
+component for proper CC1101 TX/RX mode switching via `xmit()` / `recv()` calls.
 
 ## Installation
 
@@ -54,6 +54,8 @@ your-esphome-config/
 
 ```yaml
 external_components:
+  - source: github://juanboro/esphome-radiolib-cc1101@main
+    components: [radiolib_cc1101]
   - source:
       type: local
       path: components
@@ -64,6 +66,8 @@ external_components:
 
 ```yaml
 external_components:
+  - source: github://juanboro/esphome-radiolib-cc1101@main
+    components: [radiolib_cc1101]
   - source:
       type: git
       url: https://github.com/jozefnad/esphome-rf433_gateway
@@ -74,7 +78,7 @@ external_components:
 
 ## Quick Start
 
-### 1. CC1101 + SPI setup
+### 1. CC1101 + SPI setup (RadioLib)
 
 ```yaml
 spi:
@@ -82,14 +86,18 @@ spi:
   mosi_pin: GPIO6
   miso_pin: GPIO5
 
-cc1101:
+radiolib_cc1101:
+  id: mycc1101
   cs_pin: GPIO7
-  gdo0_pin:
+  rx_pin:
     number: GPIO3
     allow_other_uses: true
-  frequency: 433.92MHz
-  modulation_type: ASK/OOK
-  output_power: 1
+  frequency: 433.92mhz
+  filter: 540khz
+  bitrate: 2.4
+  reg_agcctrl2: 0x43
+  reg_agcctrl1: 0x40
+  reg_agcctrl0: 0x91
 ```
 
 ### 2. Remote receiver/transmitter (shared GDO0 pin)
@@ -100,8 +108,11 @@ remote_receiver:
     pin:
       number: GPIO3
       allow_other_uses: true
-    dump: [raw, dooya]
-    idle: 10ms
+      mode:
+        input: true
+        pullup: true
+    dump: [dooya]
+    idle: 7ms
     filter: 100us
     tolerance: 40%
     buffer_size: 4kb
@@ -111,13 +122,19 @@ remote_transmitter:
     pin:
       number: GPIO3
       allow_other_uses: true
+      mode:
+        output: true
+        input: true
+        pullup: true
+        open_drain: true
     carrier_duty_percent: 100%
+    non_blocking: false
     on_transmit:
       then:
-        - cc1101.begin_tx
+        - lambda: 'id(mycc1101).xmit();'
     on_complete:
       then:
-        - cc1101.begin_rx
+        - lambda: 'id(mycc1101).recv();'
 ```
 
 ### 3. RF433 Gateway component
@@ -247,20 +264,15 @@ The `address` field is a **bitmask** — one bit per channel:
 components/rf433_gw/
 ├── __init__.py              ← ESPHome Python schema & code generation
 ├── rf433_gw.h               ← Receiver, triggers, transmit action (C++)
-└── protocols/
-    ├── aok.h                ← AOKData, AOKCommand enum, timing, AOKProtocol class
-    ├── aok.cpp              ← A-OK encoder (3-frame TX) & decoder
-    ├── nexus.h              ← NexusData, timing, NexusProtocol class
-    └── nexus.cpp            ← Nexus PPM decoder (36-bit, temp/humidity)
+├── aok.h                    ← A-OK protocol: encode, decode, timing
+└── nexus.h                  ← Nexus/Solight TE81 decoder
 ```
 
-Each protocol is self-contained — its data struct, constants, and implementation
-are all in the same `.h`/`.cpp` pair. No shared base class needed.
+All code is **header-only** (no .cpp files) for compatibility with ESP-IDF build.
 
 ### Adding a New Protocol
 
-1. Create `protocols/myproto.h` — define `MyProtoData` struct + `MyProtoProtocol` class
-2. Create `protocols/myproto.cpp` — implement decode (and optionally encode)
+1. Create `myproto.h` — define `MyProtoData` struct + `MyProtoProtocol` class (header-only)
 3. Add decode attempt in `RF433GWReceiver::on_receive()` in `rf433_gw.h`
 4. Add trigger class (`MyProtoTrigger`) in `rf433_gw.h`
 5. Add schema + code generation in `__init__.py`
@@ -268,11 +280,12 @@ are all in the same `.h`/`.cpp` pair. No shared base class needed.
 
 ## Design Decisions
 
-### Why not a custom CC1101 SPI driver?
+### Why RadioLib CC1101?
 
-ESPHome has a **built-in `cc1101` component** that handles all SPI communication,
-register configuration, frequency setting, AGC tuning, and automatic GDO0 pin mode
-switching. Writing a custom driver would be reinventing the wheel with no benefit.
+The `radiolib_cc1101` external component from `juanboro` correctly handles the
+CC1101's IOCFG0 register configuration for async serial OOK TX/RX mode switching.
+This is essential for single-pin GDO0 setups. The built-in ESPHome `cc1101`
+component does not reliably handle OOK TX via GDO0.
 
 ### Why is Dooya not part of the component?
 
@@ -288,7 +301,7 @@ and the `rf433_gw` component side-by-side.
 The original YAML used ~60 lines of lambda C++ in `on_raw:` for A-OK decoding and
 a `transmit_aok` script with manual packet construction. The `rf433_gw` component
 replaces all of this with:
-- Proper `RemoteProtocol<AOKData>` encoder/decoder with 3-frame transmission
+- Proper `RemoteProtocol<AOKData>` encoder/decoder with calibrated TX timing
 - Named commands (`UP`, `DOWN`, `STOP`, `LIGHT_ON`, `LIGHT_OFF`) instead of hex values
 - `on_aok:` triggers with optional filtering (no manual `if/switch` in lambdas)
 - Checksum validation, debounce, and self-reception protection built-in
