@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cinttypes>
 #include "esphome/core/log.h"
 #include "esphome/components/remote_base/remote_base.h"
 
@@ -38,6 +39,7 @@ class NexusProtocol {
   optional<NexusData> decode(remote_base::RemoteReceiveData src) {
     const int32_t n = src.size();
     if (n < 74) return {};
+    ESP_LOGD(TAG_NEXUS, "decode attempt: buffer n=%d", n);
 
     // Retry loop: TE81/Nexus sensors send 36 bits 12× per transmission.
     // With idle:7ms, ESPHome captures all frames in one big buffer (~888 items).
@@ -58,7 +60,10 @@ class NexusProtocol {
         }
         idx++;
       }
-      if (!sync_found) return {};
+      if (!sync_found) {
+        ESP_LOGD(TAG_NEXUS, "no sync found (scanned %d of %d items)", idx, n);
+        return {};
+      }
 
       // Resume scanning from here if this frame fails
       scan_pos = idx;
@@ -86,7 +91,10 @@ class NexusProtocol {
         }
         // No space at end of buffer → bit stays 0 (last bit of last frame)
       }
-      if (!frame_ok) continue;  // try next sync in the buffer
+      if (!frame_ok) {
+        ESP_LOGD(TAG_NEXUS, "frame decode failed at idx=%d of %d", idx, n);
+        continue;
+      }
 
       // ── Extract fields ─────────────────────────────────────────────────
       uint8_t b_id    = (bits >> 28) & 0xFF;
@@ -97,13 +105,16 @@ class NexusProtocol {
 
       // ── Validate (matching rtl_433 nexus_decode) ───────────────────────
       // Constant nibble must be 0xF
-      if (b_const != 0x0F) continue;
+      if (b_const != 0x0F) {
+        ESP_LOGD(TAG_NEXUS, "const nibble=0x%X (expected 0xF), bits=0x%09" PRIx64, b_const, bits);
+        continue;
+      }
 
       // Reject all-zeros or all-ones patterns (rtl_433 false positive check)
-      if (b_id == 0 || b_id == 0xFF) continue;
-
-      // Channel CC=3 is Sauna-only (rtl_433 rejects it for standard Nexus)
-      if ((b_flags & 0x03) == 0x03) continue;
+      if (b_id == 0 || b_id == 0xFF) {
+        ESP_LOGD(TAG_NEXUS, "rejected id=0x%02X (all-zeros or all-ones)", b_id);
+        continue;
+      }
 
       NexusData data;
       data.id         = b_id;

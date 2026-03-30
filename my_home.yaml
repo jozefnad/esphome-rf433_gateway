@@ -56,6 +56,9 @@ logger:
     esp32_ble_tracker: WARN
     bluetooth_proxy: WARN
     esp32_ble_client: WARN
+    rf433_gw: DEBUG
+    rf433_gw.nexus: DEBUG
+    rf433_gw.aok: WARN
 
 api:
   encryption:
@@ -107,7 +110,7 @@ remote_receiver:
         open_drain: false
     dump:
       - dooya
-      # - raw  # odkomentovať pre diagnostiku
+      - raw  # dočasne zapnuté pre diagnostiku TE81
     idle: 7ms
     filter: 100us
     tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access

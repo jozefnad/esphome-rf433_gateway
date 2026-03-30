@@ -91,10 +91,12 @@ class RF433GWReceiver : public Component,
 
     // Try Nexus decode — needs at least 74 items (sync + 36 bits × 2)
     // Skip if A-OK already matched (different protocol, can't be both)
+    bool nexus_matched = false;
     if (!aok_matched && buf_size >= 74) {
       NexusProtocol nexus_proto;
       auto nexus_data = nexus_proto.decode(src);
       if (nexus_data.has_value()) {
+        nexus_matched = true;
         uint32_t now = millis();
         if (nexus_data->id != last_nexus_id_ ||
             nexus_data->channel != last_nexus_ch_ ||
@@ -108,6 +110,17 @@ class RF433GWReceiver : public Component,
             trigger->process(*nexus_data);
         }
       }
+    }
+
+    // Log unmatched packets for protocol identification (TE81 diagnosis)
+    if (!aok_matched && !nexus_matched && buf_size >= 60) {
+      int cnt = buf_size < 20 ? buf_size : 20;
+      char timings[300];
+      int pos = 0;
+      for (int i = 0; i < cnt && pos < 280; i++) {
+        pos += snprintf(timings + pos, sizeof(timings) - pos, "%d ", (int)src[i]);
+      }
+      ESP_LOGD(TAG_GW, "Unmatched RF: %d items, first %d: [%s]", buf_size, cnt, timings);
     }
 
     // Always return false — allow built-in Dooya listener and dump to proceed
