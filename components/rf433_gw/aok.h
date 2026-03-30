@@ -62,16 +62,6 @@ static const uint32_t AOK_TX_ZERO_HIGH_US = 270;   // bit 0 mark
 static const uint32_t AOK_TX_ZERO_LOW_US  = 565;   // bit 0 space
 static const uint32_t AOK_TX_TRAILING_US  = 5030;  // radio silence after frame
 
-// RX timing — wider tolerance for decode (multiples of ~300 µs base)
-static const uint32_t AOK_BASE_US         = 300;
-static const uint32_t AOK_SYNC_HIGH_US    = AOK_BASE_US * 17;  // 5100 µs
-static const uint32_t AOK_SYNC_LOW_US     = AOK_BASE_US * 2;   //  600 µs
-static const uint32_t AOK_ZERO_HIGH_US    = AOK_BASE_US * 1;   //  300 µs
-static const uint32_t AOK_ZERO_LOW_US     = AOK_BASE_US * 2;   //  600 µs
-static const uint32_t AOK_ONE_HIGH_US     = AOK_BASE_US * 2;   //  600 µs
-static const uint32_t AOK_ONE_LOW_US      = AOK_BASE_US * 1;   //  300 µs
-static const uint8_t  AOK_PREAMBLE_BITS   = 7;
-
 // ─── A-OK Protocol (encoder + decoder) — header-only ───────────────────────
 // TX: single frame [SYNC 5300/530µs][64 data bits][trailing '1'][silence 5030µs]
 // Use repeat: times: 3 in YAML for multiple transmissions (like the real remote).
@@ -106,50 +96,36 @@ class AOKProtocol : public remote_base::RemoteProtocol<AOKData> {
   }
 
   optional<AOKData> decode(remote_base::RemoteReceiveData src) override {
-    // Scan for sync pulse, skipping optional leading '0' preamble bits.
-    // Uses expect_mark + expect_space separately to avoid stale index on
-    // partial expect_item matches.
-    bool sync_found = false;
-    for (int skip = 0; skip <= AOK_PREAMBLE_BITS + 3; skip++) {
-      if (src.expect_mark(AOK_SYNC_HIGH_US)) {
-        if (src.expect_space(AOK_SYNC_LOW_US)) {
-          sync_found = true;
-          break;
-        }
-        // Mark matched but space didn't — not recoverable at this position
-        break;
-      }
-      // Not a sync mark — try to skip a preamble '0' bit
-      if (!src.expect_mark(AOK_ZERO_HIGH_US)) break;
-      if (!src.expect_space(AOK_ZERO_LOW_US)) break;
-    }
-    if (!sync_found) return {};
+    const int32_t n = src.size();
+    if (n < 130) return {};
 
-    // 64 data bits, MSB first.
-    // A-OK bit encoding:  1 = long mark + short space,  0 = short mark + long space.
-    // Mark ranges overlap at 40% tolerance, so we accept any valid mark and
-    // determine bit value from the space duration (try long space first to
-    // avoid misclassifying ambiguous values in the overlap zone).
+    // Linear scan for AGC/sync mark (4500–6000 µs)
+    int idx = 0;
+    while (idx < n - 130) {
+      if (src[idx] > 4500 && src[idx] < 6000) break;
+      idx++;
+    }
+    if (idx >= n - 130) return {};
+    idx++;  // past sync mark
+
+    // Sync space: ~530 µs, accept –300 to –800
+    if (idx >= n || src[idx] > -300 || src[idx] < -800) return {};
+    idx++;  // past sync space
+
+    // 64 data bits — bit value from mark duration only:
+    //   mark > 400 µs → bit 1 (long mark ~565 µs)
+    //   mark ≤ 400 µs → bit 0 (short mark ~270 µs)
     uint64_t bits = 0;
-    for (int i = 63; i >= 0; i--) {
-      if (!src.expect_mark(AOK_ONE_HIGH_US) && !src.expect_mark(AOK_ZERO_HIGH_US)) {
-        return {};
-      }
-      if (src.expect_space(AOK_ZERO_LOW_US)) {
-        // long space → bit 0
-      } else if (src.expect_space(AOK_ONE_LOW_US)) {
-        bits |= (1ULL << i);  // short space → bit 1
-      } else {
-        return {};
-      }
+    for (int bit = 0; bit < 64; bit++) {
+      if (idx >= n) return {};
+      int32_t mark = src[idx++];
+      if (mark < 150 || mark > 900) return {};
+      bits = (bits << 1) | (mark > 400 ? 1 : 0);
+      if (idx < n && src[idx] < 0) idx++;  // skip space
     }
 
-    // Trailing '1' — consume mark if present (space can be anything)
-    src.expect_mark(AOK_ONE_HIGH_US);
-
-    // Validate start byte
-    uint8_t start = (bits >> 56) & 0xFF;
-    if (start != 0xA3) return {};
+    // Validate header byte (0xA3)
+    if (((bits >> 56) & 0xFF) != 0xA3) return {};
 
     // Unpack fields
     AOKData data;
@@ -158,9 +134,8 @@ class AOKProtocol : public remote_base::RemoteProtocol<AOKData> {
     data.command   = (bits >>  8) & 0xFF;
     uint8_t rx_crc =  bits        & 0xFF;
 
-    uint8_t calc_crc = data.checksum();
-    if (rx_crc != calc_crc) {
-      ESP_LOGW(TAG_AOK, "Checksum mismatch rx=0x%02X calc=0x%02X", rx_crc, calc_crc);
+    if (rx_crc != data.checksum()) {
+      ESP_LOGW(TAG_AOK, "Checksum mismatch rx=0x%02X calc=0x%02X", rx_crc, data.checksum());
       return {};
     }
 

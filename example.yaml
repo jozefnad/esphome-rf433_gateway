@@ -66,7 +66,6 @@ remote_receiver:
     dump: [raw, dooya]  # raw for debugging, dooya built-in
     idle: 7ms
     filter: 100us
-    tolerance: 40%
     buffer_size: 4kb
 
 # ─── Remote Transmitter ───────────────────────────────────────────────────

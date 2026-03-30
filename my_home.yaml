@@ -110,7 +110,6 @@ remote_receiver:
       # - raw  # odkomentovať pre diagnostiku
     idle: 7ms
     filter: 100us
-    tolerance: 40%
     buffer_size: 4kb
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────

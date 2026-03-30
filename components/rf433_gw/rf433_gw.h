@@ -68,10 +68,12 @@ class RF433GWReceiver : public Component,
     if (buf_size < 20) return false;
 
     // Try A-OK decode — needs at least ~130 items (sync + 64 bits × 2)
+    bool aok_matched = false;
     if (buf_size >= 130) {
       AOKProtocol aok_proto;
       auto aok_data = aok_proto.decode(src);
       if (aok_data.has_value()) {
+        aok_matched = true;
         uint32_t now = millis();
         if (aok_data->remote_id != last_aok_remote_id_ ||
             aok_data->command != last_aok_command_ ||
@@ -88,7 +90,8 @@ class RF433GWReceiver : public Component,
     }
 
     // Try Nexus decode — needs at least 74 items (sync + 36 bits × 2)
-    if (buf_size >= 74) {
+    // Skip if A-OK already matched (different protocol, can't be both)
+    if (!aok_matched && buf_size >= 74) {
       NexusProtocol nexus_proto;
       auto nexus_data = nexus_proto.decode(src);
       if (nexus_data.has_value()) {

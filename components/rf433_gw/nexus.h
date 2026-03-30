@@ -22,14 +22,10 @@ struct NexusData {
   }
 };
 
-// ─── Nexus/Solight TE81 Timing constants (µs) ──────────────────────────────
-// PPM modulation: ~500µs pulse, short gap ~1000µs (bit 0), long gap ~2000µs (bit 1)
-// Sync: ~500µs pulse + ~4000µs gap
-// Reset: > 5000µs gap
-static const uint32_t NEXUS_PULSE_US      = 500;
-static const uint32_t NEXUS_SHORT_GAP_US  = 1000;  // bit 0
-static const uint32_t NEXUS_LONG_GAP_US   = 2000;  // bit 1
-static const uint32_t NEXUS_SYNC_GAP_US   = 4000;  // sync gap
+// ─── Nexus/Solight TE81 Timing ─────────────────────────────────────────────
+// PPM modulation: ~500 µs pulse, short gap ~1000 µs (bit 0), long gap ~2000 µs (bit 1)
+// Sync: ~500 µs pulse + ~4000 µs gap
+// Decoder uses direct raw-array access (no expect_mark / expect_space) for speed.
 
 // ─── Nexus Protocol (RX-only decoder) — header-only ────────────────────────
 // Protocol: 36 bits, PPM (distance coding)
@@ -40,40 +36,40 @@ static const uint32_t NEXUS_SYNC_GAP_US   = 4000;  // sync gap
 class NexusProtocol {
  public:
   optional<NexusData> decode(remote_base::RemoteReceiveData src) {
-    // Scan for sync: ~500µs pulse followed by ~4000µs gap.
-    // Uses expect_mark + expect_space separately to avoid the stale-index
-    // bug in expect_item (mark matches → index advances → space fails →
-    // index stuck at space position → all subsequent calls fail).
+    const int32_t n = src.size();
+    if (n < 74) return {};
+
+    // Linear scan for sync: mark 300–700 µs + space –3000 to –5000
+    int idx = 0;
     bool sync_found = false;
-    for (int attempt = 0; attempt < 10; attempt++) {
-      if (!src.expect_mark(NEXUS_PULSE_US)) break;
-      if (src.expect_space(NEXUS_SYNC_GAP_US)) {
+    while (idx < n - 73) {
+      if (src[idx] > 300 && src[idx] < 700 &&
+          idx + 1 < n && src[idx + 1] < -3000 && src[idx + 1] > -5000) {
+        idx += 2;  // past sync mark + space
         sync_found = true;
         break;
       }
-      // Not sync gap — skip if it's a valid data bit
-      if (src.expect_space(NEXUS_SHORT_GAP_US)) continue;
-      if (src.expect_space(NEXUS_LONG_GAP_US)) continue;
-      break;
+      idx++;
     }
     if (!sync_found) return {};
 
-    // Decode 36 bits (PPM: pulse + gap, short=0, long=1).
-    // Try long gap first to avoid misclassification in the overlap zone.
+    // 36 bits — PPM distance coding:
+    //   mark ~500 µs + space ~1000 µs = bit 0
+    //   mark ~500 µs + space ~2000 µs = bit 1
+    //   threshold: |space| > 1500 → bit 1
     uint64_t bits = 0;
     for (int i = 35; i >= 0; i--) {
-      if (!src.expect_mark(NEXUS_PULSE_US)) {
-        return {};
+      if (idx >= n) return {};
+      int32_t mark = src[idx++];
+      if (mark < 300 || mark > 700) return {};
+
+      if (idx < n && src[idx] < 0) {
+        int32_t space = src[idx++];
+        if (space < -1500) {
+          bits |= (1ULL << i);  // long gap → bit 1
+        }
       }
-      if (src.expect_space(NEXUS_LONG_GAP_US)) {
-        bits |= (1ULL << i);  // bit 1
-      } else if (src.expect_space(NEXUS_SHORT_GAP_US)) {
-        // bit 0
-      } else if (i == 0) {
-        // Last bit — trailing space can be anything (idle, next frame, etc.)
-      } else {
-        return {};
-      }
+      // No space (last bit or end of buffer) → bit stays 0
     }
 
     // Extract fields
