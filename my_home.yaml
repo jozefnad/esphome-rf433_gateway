@@ -106,11 +106,11 @@ radiolib_cc1101:
     number: $gdo0
     allow_other_uses: true
   frequency: 433.92mhz
-  filter: 540khz
-  bitrate: 2.4
-  reg_agcctrl2: 0x43
-  reg_agcctrl1: 0x40
-  reg_agcctrl0: 0x91
+  filter: 812khz       # widened from 540khz — better for off-frequency sensors (TE81)
+  bitrate: 1.6         # lowered from 2.4 — longer symbol period for Nexus slow timing
+  reg_agcctrl2: 0x07   # MAX_DVGA_GAIN=00 (all gains), MAX_LNA_GAIN=000 (max), MAGN_TARGET=42dB
+  reg_agcctrl1: 0x00   # AGC_LNA_PRIORITY=0, faster LNA gain settling
+  reg_agcctrl0: 0x92   # HYST_LEVEL=10(medium), FILTER_LENGTH=10(16 OOK samples, was 8)
 
 # ─── Remote Receiver (CC1101 GDO0) ────────────────────────────────────────
 remote_receiver:
