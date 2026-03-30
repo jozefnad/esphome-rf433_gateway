@@ -39,12 +39,12 @@ class NexusProtocol {
     const int32_t n = src.size();
     if (n < 74) return {};
 
-    // Linear scan for sync: mark 300–700 µs + space –3000 to –5000
+    // Linear scan for sync: mark 300–700 µs + space –2500 to –6000
     int idx = 0;
     bool sync_found = false;
     while (idx < n - 73) {
       if (src[idx] > 300 && src[idx] < 700 &&
-          idx + 1 < n && src[idx + 1] < -3000 && src[idx + 1] > -5000) {
+          idx + 1 < n && src[idx + 1] < -2500 && src[idx + 1] > -6000) {
         idx += 2;  // past sync mark + space
         sync_found = true;
         break;
@@ -86,8 +86,8 @@ class NexusProtocol {
       ESP_LOGV(TAG_NEXUS, "Const nibble mismatch: 0x%X (expected 0xF)", b[2]);
       return {};
     }
-    // Reduce false positives: ID must not be 0
-    if (b[0] == 0) return {};
+    // Reduce false positives: ID must not be 0 or 0xFF
+    if (b[0] == 0 || b[0] == 0xFF) return {};
 
     NexusData data;
     data.id         = b[0];
@@ -101,6 +101,10 @@ class NexusProtocol {
 
     // Humidity
     data.humidity = (b[3] << 4) | b[4];
+
+    // Reject unrealistic sensor values (false decode protection)
+    if (data.temperature < -40.0f || data.temperature > 80.0f) return {};
+    if (data.humidity > 100) return {};
 
     return data;
   }

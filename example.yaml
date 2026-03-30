@@ -66,6 +66,7 @@ remote_receiver:
     dump: [raw, dooya]  # raw for debugging, dooya built-in
     idle: 7ms
     filter: 100us
+    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
     buffer_size: 4kb
 
 # ─── Remote Transmitter ───────────────────────────────────────────────────

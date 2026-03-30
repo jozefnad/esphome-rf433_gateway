@@ -110,6 +110,7 @@ remote_receiver:
       # - raw  # odkomentovať pre diagnostiku
     idle: 7ms
     filter: 100us
+    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
     buffer_size: 4kb
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────
