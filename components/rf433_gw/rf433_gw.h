@@ -3,8 +3,8 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/components/remote_base/remote_base.h"
-#include "protocols/aok.h"
-#include "protocols/nexus.h"
+#include "aok.h"
+#include "nexus.h"
 
 namespace esphome {
 namespace rf433_gw {

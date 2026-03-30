@@ -46,11 +46,10 @@ your-esphome-config/
 │   └── rf433_gw/
 │       ├── __init__.py
 │       ├── rf433_gw.h
-│       └── protocols/
-│           ├── aok.h
-│           ├── aok.cpp
-│           ├── nexus.h
-│           └── nexus.cpp
+│       ├── aok.h
+│       ├── aok.cpp
+│       ├── nexus.h
+│       └── nexus.cpp
 ├── my_home.yaml
 └── secrets.yaml
 ```
@@ -69,7 +68,7 @@ external_components:
 external_components:
   - source:
       type: git
-      url: https://github.com/YOUR_USER/esphome-cc1101
+      url: https://github.com/jozefnad/esphome-rf433_gateway
       ref: main
     components: [rf433_gw]
     refresh: 1d
