@@ -119,9 +119,11 @@ remote_transmitter:
 # ─── RF433 Gateway Component ──────────────────────────────────────────────
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/jozefnad/esphome-rf433_gateway
+      ref: main
     components: [rf433_gw]
+    refresh: 0s
 
 rf433_gw:
   id: rf_gw

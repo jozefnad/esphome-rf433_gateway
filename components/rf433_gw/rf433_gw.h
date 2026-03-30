@@ -148,7 +148,7 @@ class AOKTransmitAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(uint32_t, send_times)
   TEMPLATABLE_VALUE(uint32_t, send_wait)
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     // Self-reception protection: mark as transmitting
     if (receiver_ != nullptr) {
       receiver_->set_transmitting(true);
@@ -170,10 +170,8 @@ class AOKTransmitAction : public Action<Ts...> {
     }
     call.perform();
 
-    // Release self-reception protection after a delay
+    // Release self-reception protection
     if (receiver_ != nullptr) {
-      // Delay is handled by ESPHome's remote_transmitter on_complete callback
-      // We set it to false; the user should set up on_complete → recv()
       receiver_->set_transmitting(false);
     }
   }
