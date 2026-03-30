@@ -40,32 +40,39 @@ static const uint32_t NEXUS_SYNC_GAP_US   = 4000;  // sync gap
 class NexusProtocol {
  public:
   optional<NexusData> decode(remote_base::RemoteReceiveData src) {
-    // Scan for sync pulse
+    // Scan for sync: ~500µs pulse followed by ~4000µs gap.
+    // Uses expect_mark + expect_space separately to avoid the stale-index
+    // bug in expect_item (mark matches → index advances → space fails →
+    // index stuck at space position → all subsequent calls fail).
     bool sync_found = false;
     for (int attempt = 0; attempt < 10; attempt++) {
-      if (src.expect_item(NEXUS_PULSE_US, NEXUS_SYNC_GAP_US)) {
+      if (!src.expect_mark(NEXUS_PULSE_US)) break;
+      if (src.expect_space(NEXUS_SYNC_GAP_US)) {
         sync_found = true;
         break;
       }
-      if (src.expect_item(NEXUS_PULSE_US, NEXUS_SHORT_GAP_US)) continue;
-      if (src.expect_item(NEXUS_PULSE_US, NEXUS_LONG_GAP_US)) continue;
+      // Not sync gap — skip if it's a valid data bit
+      if (src.expect_space(NEXUS_SHORT_GAP_US)) continue;
+      if (src.expect_space(NEXUS_LONG_GAP_US)) continue;
       break;
     }
     if (!sync_found) return {};
 
-    // Decode 36 bits (PPM: pulse + gap, short=0, long=1)
+    // Decode 36 bits (PPM: pulse + gap, short=0, long=1).
+    // Try long gap first to avoid misclassification in the overlap zone.
     uint64_t bits = 0;
     for (int i = 35; i >= 0; i--) {
-      if (src.expect_item(NEXUS_PULSE_US, NEXUS_LONG_GAP_US)) {
-        bits |= (1ULL << i);
-      } else if (src.expect_item(NEXUS_PULSE_US, NEXUS_SHORT_GAP_US)) {
-        // bit stays 0
+      if (!src.expect_mark(NEXUS_PULSE_US)) {
+        return {};
+      }
+      if (src.expect_space(NEXUS_LONG_GAP_US)) {
+        bits |= (1ULL << i);  // bit 1
+      } else if (src.expect_space(NEXUS_SHORT_GAP_US)) {
+        // bit 0
+      } else if (i == 0) {
+        // Last bit — trailing space can be anything (idle, next frame, etc.)
       } else {
-        if (i == 0 && src.expect_mark(NEXUS_PULSE_US)) {
-          // Last bit consumed, trailing space can be anything
-        } else {
-          return {};
-        }
+        return {};
       }
     }
 

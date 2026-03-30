@@ -106,33 +106,46 @@ class AOKProtocol : public remote_base::RemoteProtocol<AOKData> {
   }
 
   optional<AOKData> decode(remote_base::RemoteReceiveData src) override {
-    // Scan for sync pulse, skipping optional leading '0' preamble bits
+    // Scan for sync pulse, skipping optional leading '0' preamble bits.
+    // Uses expect_mark + expect_space separately to avoid stale index on
+    // partial expect_item matches.
     bool sync_found = false;
     for (int skip = 0; skip <= AOK_PREAMBLE_BITS + 3; skip++) {
-      if (src.expect_item(AOK_SYNC_HIGH_US, AOK_SYNC_LOW_US)) {
-        sync_found = true;
+      if (src.expect_mark(AOK_SYNC_HIGH_US)) {
+        if (src.expect_space(AOK_SYNC_LOW_US)) {
+          sync_found = true;
+          break;
+        }
+        // Mark matched but space didn't — not recoverable at this position
         break;
       }
-      if (!src.expect_item(AOK_ZERO_HIGH_US, AOK_ZERO_LOW_US)) {
-        break;
-      }
+      // Not a sync mark — try to skip a preamble '0' bit
+      if (!src.expect_mark(AOK_ZERO_HIGH_US)) break;
+      if (!src.expect_space(AOK_ZERO_LOW_US)) break;
     }
     if (!sync_found) return {};
 
-    // 64 data bits, MSB first
+    // 64 data bits, MSB first.
+    // A-OK bit encoding:  1 = long mark + short space,  0 = short mark + long space.
+    // Mark ranges overlap at 40% tolerance, so we accept any valid mark and
+    // determine bit value from the space duration (try long space first to
+    // avoid misclassifying ambiguous values in the overlap zone).
     uint64_t bits = 0;
     for (int i = 63; i >= 0; i--) {
-      if (src.expect_item(AOK_ONE_HIGH_US, AOK_ONE_LOW_US)) {
-        bits |= (1ULL << i);
-      } else if (src.expect_item(AOK_ZERO_HIGH_US, AOK_ZERO_LOW_US)) {
-        // bit stays 0
+      if (!src.expect_mark(AOK_ONE_HIGH_US) && !src.expect_mark(AOK_ZERO_HIGH_US)) {
+        return {};
+      }
+      if (src.expect_space(AOK_ZERO_LOW_US)) {
+        // long space → bit 0
+      } else if (src.expect_space(AOK_ONE_LOW_US)) {
+        bits |= (1ULL << i);  // short space → bit 1
       } else {
         return {};
       }
     }
 
-    // Trailing '1' — consume if present
-    src.expect_item(AOK_ONE_HIGH_US, AOK_ONE_LOW_US);
+    // Trailing '1' — consume mark if present (space can be anything)
+    src.expect_mark(AOK_ONE_HIGH_US);
 
     // Validate start byte
     uint8_t start = (bits >> 56) & 0xFF;

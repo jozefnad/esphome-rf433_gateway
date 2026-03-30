@@ -87,8 +87,8 @@ class RF433GWReceiver : public Component,
       }
     }
 
-    // Try Nexus decode — needs at least ~73 items (sync + 36 bits × 2)
-    if (buf_size >= 36) {
+    // Try Nexus decode — needs at least 74 items (sync + 36 bits × 2)
+    if (buf_size >= 74) {
       NexusProtocol nexus_proto;
       auto nexus_data = nexus_proto.decode(src);
       if (nexus_data.has_value()) {

@@ -51,14 +51,11 @@ wifi:
     password: !secret wifi_ap_password
 
 logger:
-  level: DEBUG
+  level: INFO
   logs:
-    # Suppress noisy components at INFO to keep logs readable
     esp32_ble_tracker: WARN
     bluetooth_proxy: WARN
     esp32_ble_client: WARN
-    sensor: INFO
-    wifi: INFO
 
 api:
   encryption:
