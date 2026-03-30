@@ -53,6 +53,16 @@ struct AOKData {
 };
 
 // ─── Timing constants (µs) ─────────────────────────────────────────────────
+// TX timing — calibrated to match the real A-OK AC114/AC226 remotes
+static const uint32_t AOK_TX_SYNC_HIGH_US = 5300;  // AGC mark
+static const uint32_t AOK_TX_SYNC_LOW_US  = 530;   // AGC space
+static const uint32_t AOK_TX_ONE_HIGH_US  = 565;   // bit 1 mark
+static const uint32_t AOK_TX_ONE_LOW_US   = 270;   // bit 1 space
+static const uint32_t AOK_TX_ZERO_HIGH_US = 270;   // bit 0 mark
+static const uint32_t AOK_TX_ZERO_LOW_US  = 565;   // bit 0 space
+static const uint32_t AOK_TX_TRAILING_US  = 5030;  // radio silence after frame
+
+// RX timing — wider tolerance for decode (multiples of ~300 µs base)
 static const uint32_t AOK_BASE_US         = 300;
 static const uint32_t AOK_SYNC_HIGH_US    = AOK_BASE_US * 17;  // 5100 µs
 static const uint32_t AOK_SYNC_LOW_US     = AOK_BASE_US * 2;   //  600 µs
@@ -61,24 +71,38 @@ static const uint32_t AOK_ZERO_LOW_US     = AOK_BASE_US * 2;   //  600 µs
 static const uint32_t AOK_ONE_HIGH_US     = AOK_BASE_US * 2;   //  600 µs
 static const uint32_t AOK_ONE_LOW_US      = AOK_BASE_US * 1;   //  300 µs
 static const uint8_t  AOK_PREAMBLE_BITS   = 7;
-static const uint32_t AOK_INTER_FRAME_US  = AOK_BASE_US * 17;  // 5100 µs
 
 // ─── A-OK Protocol (encoder + decoder) — header-only ───────────────────────
-// A full A-OK transmission consists of 3 identical frames:
-//   Frame 1: [7× '0' preamble][SYNC][64 data bits][trailing '1' LOW=5100µs]
-//   Frame 2: [SYNC][64 data bits][trailing '1' LOW=5100µs]
-//   Frame 3: [SYNC][64 data bits][trailing '1' LOW=300µs]
+// TX: single frame [SYNC 5300/530µs][64 data bits][trailing '1'][silence 5030µs]
+// Use repeat: times: 3 in YAML for multiple transmissions (like the real remote).
+// The encode() timing is calibrated to match the real AC114/AC226 remotes.
 
 class AOKProtocol : public remote_base::RemoteProtocol<AOKData> {
  public:
   void encode(remote_base::RemoteTransmitData *dst, const AOKData &data) override {
     uint64_t bits = data.to_uint64();
-    dst->reserve(412);
+    // Single frame: sync + 64 data bits + trailing bit + silence = ~135 items
+    dst->reserve(135);
     dst->set_carrier_frequency(0);  // OOK — no carrier
 
-    encode_frame_(dst, bits, true,  false);  // frame 1: preamble, gap trailing
-    encode_frame_(dst, bits, false, false);  // frame 2: no preamble, gap trailing
-    encode_frame_(dst, bits, false, true);   // frame 3: no preamble, normal trailing
+    // AGC / Sync pulse
+    dst->item(AOK_TX_SYNC_HIGH_US, AOK_TX_SYNC_LOW_US);
+
+    // 64 data bits, MSB first
+    for (int i = 63; i >= 0; i--) {
+      if ((bits >> i) & 1u) {
+        dst->item(AOK_TX_ONE_HIGH_US, AOK_TX_ONE_LOW_US);
+      } else {
+        dst->item(AOK_TX_ZERO_HIGH_US, AOK_TX_ZERO_LOW_US);
+      }
+    }
+
+    // Trailing bit (always 1)
+    dst->mark(AOK_TX_ONE_HIGH_US);
+    dst->space(AOK_TX_ONE_LOW_US);
+
+    // Radio silence
+    dst->space(AOK_TX_TRAILING_US);
   }
 
   optional<AOKData> decode(remote_base::RemoteReceiveData src) override {
@@ -144,29 +168,6 @@ class AOKProtocol : public remote_base::RemoteProtocol<AOKData> {
              data.remote_id, data.address, cmd_str, data.command);
   }
 
- private:
-  static void encode_frame_(remote_base::RemoteTransmitData *dst,
-                             uint64_t bits, bool with_preamble,
-                             bool last_frame) {
-    if (with_preamble) {
-      for (int i = 0; i < AOK_PREAMBLE_BITS; i++) {
-        dst->item(AOK_ZERO_HIGH_US, AOK_ZERO_LOW_US);
-      }
-    }
-    // Sync pulse
-    dst->item(AOK_SYNC_HIGH_US, AOK_SYNC_LOW_US);
-    // 64 data bits, MSB first
-    for (int i = 63; i >= 0; i--) {
-      if ((bits >> i) & 1u) {
-        dst->item(AOK_ONE_HIGH_US, AOK_ONE_LOW_US);
-      } else {
-        dst->item(AOK_ZERO_HIGH_US, AOK_ZERO_LOW_US);
-      }
-    }
-    // Trailing '1': inter-frame gap or normal end
-    uint32_t trailing_low = last_frame ? AOK_ONE_LOW_US : AOK_INTER_FRAME_US;
-    dst->item(AOK_ONE_HIGH_US, trailing_low);
-  }
 };
 
 }  // namespace rf433_gw
