@@ -39,74 +39,92 @@ class NexusProtocol {
     const int32_t n = src.size();
     if (n < 74) return {};
 
-    // Linear scan for sync: mark 300–700 µs + space –2500 to –6000
-    int idx = 0;
-    bool sync_found = false;
-    while (idx < n - 73) {
-      if (src[idx] > 300 && src[idx] < 700 &&
-          idx + 1 < n && src[idx + 1] < -2500 && src[idx + 1] > -6000) {
-        idx += 2;  // past sync mark + space
-        sync_found = true;
-        break;
-      }
-      idx++;
-    }
-    if (!sync_found) return {};
+    // Retry loop: TE81/Nexus sensors send 36 bits 12× per transmission.
+    // With idle:7ms, ESPHome captures all frames in one big buffer (~888 items).
+    // If the first frame is corrupted (AGC settling, noise), keep scanning for
+    // the next valid sync+frame.  Matches rtl_433's repeated-row approach.
+    int scan_pos = 0;
 
-    // 36 bits — PPM distance coding:
-    //   mark ~500 µs + space ~1000 µs = bit 0
-    //   mark ~500 µs + space ~2000 µs = bit 1
-    //   threshold: |space| > 1500 → bit 1
-    uint64_t bits = 0;
-    for (int i = 35; i >= 0; i--) {
-      if (idx >= n) return {};
-      int32_t mark = src[idx++];
-      if (mark < 300 || mark > 700) return {};
-
-      if (idx < n && src[idx] < 0) {
-        int32_t space = src[idx++];
-        if (space < -1500) {
-          bits |= (1ULL << i);  // long gap → bit 1
+    while (scan_pos <= n - 74) {
+      // ── Find sync: mark 300–700 µs + space –2500 to –6000 µs ──────────
+      int idx = scan_pos;
+      bool sync_found = false;
+      while (idx <= n - 74) {
+        if (src[idx] > 300 && src[idx] < 700 &&
+            idx + 1 < n && src[idx + 1] < -2500 && src[idx + 1] > -6000) {
+          idx += 2;  // past sync mark + gap
+          sync_found = true;
+          break;
         }
+        idx++;
       }
-      // No space (last bit or end of buffer) → bit stays 0
+      if (!sync_found) return {};
+
+      // Resume scanning from here if this frame fails
+      scan_pos = idx;
+
+      // ── Decode 36 bits (PPM distance coding) ──────────────────────────
+      // rtl_433 parameters: short_width=1000, long_width=2000, gap_limit=3000
+      // bit 0: mark ~500 µs + space ~1000 µs
+      // bit 1: mark ~500 µs + space ~2000 µs
+      // gap > 3000 µs = sync/reset (NOT a data bit) → abort this frame
+      uint64_t bits = 0;
+      bool frame_ok = true;
+      for (int i = 35; i >= 0; i--) {
+        if (idx >= n) { frame_ok = false; break; }
+        int32_t mark = src[idx++];
+        if (mark < 200 || mark > 800) { frame_ok = false; break; }
+
+        if (idx < n && src[idx] < 0) {
+          int32_t space = src[idx];
+          // gap_limit: reject spaces beyond –3000 µs (sync/reset gap, not data)
+          if (space < -3000) { frame_ok = false; break; }
+          idx++;
+          if (space < -1500) {
+            bits |= (1ULL << i);  // long gap → bit 1
+          }
+        }
+        // No space at end of buffer → bit stays 0 (last bit of last frame)
+      }
+      if (!frame_ok) continue;  // try next sync in the buffer
+
+      // ── Extract fields ─────────────────────────────────────────────────
+      uint8_t b_id    = (bits >> 28) & 0xFF;
+      uint8_t b_flags = (bits >> 24) & 0x0F;
+      uint16_t temp_raw = (bits >> 12) & 0xFFF;
+      uint8_t b_const = (bits >> 8) & 0x0F;
+      uint8_t b_hum   = ((bits >> 4) & 0x0F) << 4 | (bits & 0x0F);
+
+      // ── Validate (matching rtl_433 nexus_decode) ───────────────────────
+      // Constant nibble must be 0xF
+      if (b_const != 0x0F) continue;
+
+      // Reject all-zeros or all-ones patterns (rtl_433 false positive check)
+      if (b_id == 0 || b_id == 0xFF) continue;
+
+      // Channel CC=3 is Sauna-only (rtl_433 rejects it for standard Nexus)
+      if ((b_flags & 0x03) == 0x03) continue;
+
+      NexusData data;
+      data.id         = b_id;
+      data.battery_ok = (b_flags >> 3) & 1;
+      data.test_mode  = (b_flags >> 2) & 1;
+      data.channel    = (b_flags & 0x03) + 1;  // 0→CH1, 1→CH2, 2→CH3
+
+      // Temperature: 12-bit signed, divided by 10
+      int16_t temp_signed = (int16_t)(temp_raw << 4) >> 4;
+      data.temperature = temp_signed / 10.0f;
+
+      // Humidity
+      data.humidity = b_hum;
+
+      // Reject unrealistic sensor values
+      if (data.temperature < -40.0f || data.temperature > 80.0f) continue;
+      if (data.humidity > 100) continue;
+
+      return data;
     }
-
-    // Extract fields
-    uint8_t b[5];
-    b[0] = (bits >> 28) & 0xFF;  // id
-    b[1] = (bits >> 24) & 0x0F;  // flags
-    uint16_t temp_raw = (bits >> 12) & 0xFFF;
-    b[2] = (bits >> 8) & 0x0F;   // const nibble (should be 0xF)
-    b[3] = (bits >> 4) & 0x0F;   // humidity high nibble
-    b[4] = bits & 0x0F;          // humidity low nibble
-
-    // Validate constant nibble = 0xF
-    if (b[2] != 0x0F) {
-      ESP_LOGV(TAG_NEXUS, "Const nibble mismatch: 0x%X (expected 0xF)", b[2]);
-      return {};
-    }
-    // Reduce false positives: ID must not be 0 or 0xFF
-    if (b[0] == 0 || b[0] == 0xFF) return {};
-
-    NexusData data;
-    data.id         = b[0];
-    data.battery_ok = (b[1] >> 3) & 1;
-    data.test_mode  = (b[1] >> 2) & 1;
-    data.channel    = (b[1] & 0x03) + 1;  // channel 1-4
-
-    // Temperature: 12-bit signed, divided by 10
-    int16_t temp_signed = (int16_t)(temp_raw << 4) >> 4;
-    data.temperature = temp_signed / 10.0f;
-
-    // Humidity
-    data.humidity = (b[3] << 4) | b[4];
-
-    // Reject unrealistic sensor values (false decode protection)
-    if (data.temperature < -40.0f || data.temperature > 80.0f) return {};
-    if (data.humidity > 100) return {};
-
-    return data;
+    return {};
   }
 
   void dump(const NexusData &data) {
