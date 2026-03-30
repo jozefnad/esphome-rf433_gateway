@@ -103,11 +103,11 @@ remote_receiver:
       allow_other_uses: true
     dump:
       - dooya
-      - raw  # diagnostika — odkomentovať po overení Nexus
-    idle: 10ms
+      # - raw  # odkomentovať pre diagnostiku Nexus
+    idle: 7ms
     filter: 100us
     tolerance: 40%
-    buffer_size: 8kb
+    buffer_size: 4kb
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────
 remote_transmitter:
@@ -116,6 +116,7 @@ remote_transmitter:
       number: $gdo0
       allow_other_uses: true
     carrier_duty_percent: 100%
+    non_blocking: false
     on_transmit:
       then:
         - cc1101.begin_tx

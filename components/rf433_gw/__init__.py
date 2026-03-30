@@ -207,6 +207,7 @@ AOK_TRANSMIT_SCHEMA = cv.Schema(
     "rf433_gw.transmit_aok",
     AOKTransmitAction,
     AOK_TRANSMIT_SCHEMA,
+    synchronous=True,
 )
 async def aok_transmit_action_to_code(config, action_id, template_arg, args):
     transmitter = await cg.get_variable(config[CONF_TRANSMITTER_ID])
