@@ -1,0 +1,821 @@
+esphome:
+  name: pergola-controller
+  friendly_name: Pergola Controller
+
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(mycc1101).recv();
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+substitutions:
+  cs:   "7"    # CC1101 CSN -> GPIO7
+  clk:  "4"    # CC1101 SCK -> GPIO4
+  mosi: "6"    # CC1101 MOSI -> GPIO6
+  miso: "5"    # CC1101 MISO -> GPIO5
+  rx:   "3"    # CC1101 GDO0 -> GPIO3 (shared RX/TX)
+  tx:   "3"    # CC1101 GDO0 -> GPIO3 (shared RX/TX)
+  tx_rx_shared: "true"
+
+# --- Networking & basics -----------------------------------------------
+
+# Zapne sledovanie Bluetooth zariadení
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+# Vytvorí most medzi Bluetooth a Home Assistantom
+bluetooth_proxy:
+  active: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Dooya-Pergola Fallback"
+    password: "tDiHZav6a5rd"
+
+logger:
+  level: INFO  # INFO pre normálnu prevádzku, DEBUG pre diagnostiku
+
+api:
+  encryption:
+    key: "ZMct8b2A0jUrXy4GBlpQOCXxyibQz3kzr+FQdoDgn6Y="
+
+ota:
+  platform: esphome
+  password: "cf7a7021ccede32c0bef6bd36afe0734"
+  on_begin:
+    - lambda: id(mycc1101).standby();  # vypnutie CC1101 RX počas OTA
+
+captive_portal:
+
+status_led:
+  pin:
+    number: GPIO8
+    inverted: true
+
+# --- RadioLib CC1101 external component ----------------------------------
+
+external_components:
+  - source: github://juanboro/esphome-radiolib-cc1101@main
+    components: [radiolib_cc1101]
+
+# SPI bus pre CC1101
+spi:
+  clk_pin: $clk
+  mosi_pin: $mosi
+  miso_pin: $miso
+
+# --- Remote receiver na CC1101 GDO0 (shared RX/TX) ------------------------
+remote_receiver:
+  - id: rf_receiver
+    idle: 7ms
+    filter: 100us
+    buffer_size: 4kb
+    pin:
+      number: $rx
+      allow_other_uses: true
+      mode:
+        output: false
+        input: true
+        pullup: $tx_rx_shared
+        open_drain: false
+      id: cc1101_gdo0_recv
+
+    dump:
+      - dooya
+      # - raw  # odkomentovať pre surové dáta
+    
+    # A-OK protokol dekodér (optimalizovaný)
+    on_raw:
+      then:
+        - lambda: |-
+            // Skorý návrat ak vysielame (self-reception protection)
+            if (id(is_transmitting)) return;
+            
+            // A-OK: 65 bitov, potrebujeme min ~130 vzoriek
+            const int n = x.size();
+            if (n < 130) return;
+            
+            // Hľadaj AGC pulz (4500-6000µs HIGH)
+            int idx = 0;
+            while (idx < n && !(x[idx] > 4500 && x[idx] < 6000)) idx++;
+            if (idx >= n - 130) return;
+            
+            idx++;  // skip AGC mark
+            
+            // AGC space check (-300 to -800µs)
+            if (x[idx] > -300 || x[idx] < -800) return;
+            idx++;
+            
+            // Dekóduj 64 bitov (trailing bit ignorujeme)
+            uint64_t packet = 0;
+            for (int bit = 0; bit < 64 && idx < n; bit++) {
+              int mark = x[idx++];
+              if (mark < 150 || mark > 900) return;  // neplatný pulz
+              packet = (packet << 1) | (mark > 400 ? 1 : 0);
+              if (idx < n && x[idx] < 0) idx++;  // skip space
+            }
+            
+            // Kontrola start byte (0xA3)
+            if (((packet >> 56) & 0xFF) != 0xA3) return;
+            
+            // Extrakcia polí
+            uint32_t remote_id = (packet >> 32) & 0xFFFFFF;
+            uint16_t address = (packet >> 16) & 0xFFFF;
+            uint8_t command = (packet >> 8) & 0xFF;
+            uint8_t checksum = packet & 0xFF;
+            
+            // Checksum validácia
+            uint8_t calc = ((remote_id >> 16) + (remote_id >> 8) + remote_id) & 0xFF;
+            calc += ((address >> 8) + address + command) & 0xFF;
+            if (checksum != (calc & 0xFF)) return;  // zlý checksum - ignoruj
+            
+            // Debounce - rovnaký príkaz do 500ms
+            uint32_t now = millis();
+            if (command == id(last_aok_command) && (now - id(last_aok_command_time)) < 500) return;
+            id(last_aok_command) = command;
+            id(last_aok_command_time) = now;
+            
+            // Log (kanál ako číslo bitu +1)
+            int ch = 0;
+            for (int i = 0; i < 16; i++) if (address & (1 << i)) { ch = i + 1; break; }
+            ESP_LOGI("A-OK", "ID=0x%06X CH=%d CMD=0x%02X", remote_id, ch, command);
+            
+            // Spracovanie príkazov (len naše ovládače)
+            if (remote_id == 0xD3F5D3 || remote_id == 0xD3F611) {
+              switch (command) {
+                case 0x0B: id(aok_remote_up).publish_state(true); break;
+                case 0x43: id(aok_remote_down).publish_state(true); break;
+                case 0x23: id(aok_remote_stop).publish_state(true); break;
+                case 0x12: id(pergola_light).remote_values.set_state(true); id(pergola_light).publish_state(); break;
+                case 0x13: id(pergola_light).remote_values.set_state(false); id(pergola_light).publish_state(); break;
+              }
+            }
+
+# --- Remote transmitter na CC1101 GDO0 (shared RX/TX) ---------------------
+
+remote_transmitter:
+  - id: rf_transmitter
+    pin:
+      number: $tx
+      allow_other_uses: ${tx_rx_shared}
+      mode:
+        output: true
+        input: true
+        pullup: true
+        open_drain: true
+      id: cc1101_gdo0_xmit
+
+    on_transmit:
+      then:
+        - lambda: |-
+            id(mycc1101).xmit();   // prepnutie CC1101 do TX módu
+
+    on_complete:
+      then:
+        - lambda: |-
+            id(mycc1101).recv();   // prepnutie CC1101 do RX módu
+
+    carrier_duty_percent: 100%
+
+# --- RadioLib CC1101 konfigurácia -----------------------------------------
+
+radiolib_cc1101:
+  id: mycc1101
+  cs_pin: $cs
+
+  # použitie GDO0 ako RX pin pre RSSI/flags (rovnaký ako remote_receiver)
+  rx_pin:
+    number: $rx
+    allow_other_uses: true
+
+  # Dooya špecifická konfigurácia - nastaviteľné z HA
+  frequency: 433.92mhz      # Dooya frekvencia
+  filter: 540khz            # RX filter šírka pásma
+  bitrate: 2.4               # kbps
+  reg_agcctrl2: 0x43  # Zníženie citlivosti pre potlačenie šumu
+  reg_agcctrl1: 0x40
+  reg_agcctrl0: 0x91
+
+# --- Dooya RX helper -------------------------------------------------------
+
+binary_sensor:
+  - platform: remote_receiver
+    name: "Dooya Akýkoľvek Paket"
+    internal: false
+    dooya:
+      id: 0x00000000
+      channel: 0
+      button: 0
+      check: 0
+    filters:
+      - delayed_off: 100ms
+  
+  # Detekcia signálov z fyzického ovládača pre synchronizáciu s HA
+  # Kanál 0 - Všetky rolety
+  - platform: remote_receiver
+    name: "Ovládač Všetky - Hore"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 0
+      button: 1
+      check: 1
+    on_press:
+      - cover.open: all_blinds
+  
+  - platform: remote_receiver
+    name: "Ovládač Všetky - Dole"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 0
+      button: 3
+      check: 3
+    on_press:
+      - cover.close: all_blinds
+  
+  - platform: remote_receiver
+    name: "Ovládač Všetky - Stop"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 0
+      button: 5
+      check: 5
+    on_press:
+      - cover.stop: all_blinds
+  
+  # Kanál 1 - Roleta 1
+  - platform: remote_receiver
+    name: "Ovládač Roleta 1 - Hore"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 1
+      button: 1
+      check: 1
+    on_press:
+      - cover.open: blind_1
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 1 - Dole"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 1
+      button: 3
+      check: 3
+    on_press:
+      - cover.close: blind_1
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 1 - Stop"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 1
+      button: 5
+      check: 5
+    on_press:
+      - cover.stop: blind_1
+  
+  # Kanál 2 - Roleta 2
+  - platform: remote_receiver
+    name: "Ovládač Roleta 2 - Hore"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 2
+      button: 1
+      check: 1
+    on_press:
+      - cover.open: blind_2
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 2 - Dole"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 2
+      button: 3
+      check: 3
+    on_press:
+      - cover.close: blind_2
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 2 - Stop"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 2
+      button: 5
+      check: 5
+    on_press:
+      - cover.stop: blind_2
+  
+  # Kanál 3 - Roleta 3
+  - platform: remote_receiver
+    name: "Ovládač Roleta 3 - Hore"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 3
+      button: 1
+      check: 1
+    on_press:
+      - cover.open: blind_3
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 3 - Dole"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 3
+      button: 3
+      check: 3
+    on_press:
+      - cover.close: blind_3
+  
+  - platform: remote_receiver
+    name: "Ovládač Roleta 3 - Stop"
+    internal: true
+    dooya:
+      id: 0x00BB6A83
+      channel: 3
+      button: 5
+      check: 5
+    on_press:
+      - cover.stop: blind_3
+
+   # --- A-OK remote button sensors -------------------------------------------
+  - platform: template
+    name: "A-OK Remote UP"
+    id: aok_remote_up
+    internal: true
+    on_press:
+      - cover.open: pergola_roof
+    
+  - platform: template
+    name: "A-OK Remote DOWN"
+    id: aok_remote_down
+    internal: true
+    on_press:
+      - cover.close: pergola_roof
+  
+  - platform: template
+    name: "A-OK Remote Stop"
+    id: aok_remote_stop
+    internal: true
+    on_press:
+      - cover.stop: pergola_roof
+
+  - platform: template
+    name: "A-OK Remote LIGHT ON"
+    id: aok_remote_light_on
+    internal: true
+    on_press:
+      - light.turn_on: pergola_light
+
+  - platform: template
+    name: "A-OK Remote LIGHT OFF"
+    id: aok_remote_light_off
+    internal: true
+    on_press:
+      - light.turn_off: pergola_light
+
+# --- HA Buttons pre Dooya TX cez CC1101 -----------------------------------
+# POZNÁMKA: Musíte nahradiť ID hodnotami z vášho ovládača DC2702!
+# Použite logger level: DEBUG a sledujte logy pri tlačení tlačidiel.
+
+cover:
+  # A-OK pergola strecha
+  - platform: time_based
+    name: "Pergola Strecha"
+    id: pergola_roof
+    has_built_in_endstop: true
+    assumed_state: true
+    open_action:
+      - lambda: |-
+          // Dynamicky prepíše čas trvania v milisekundách pred spustením
+          auto duration = id(global_pergola_duration) * 1000;
+          id(pergola_roof).set_open_duration(duration);
+          id(pergola_roof).set_close_duration(duration);
+      - script.execute:
+          id: transmit_aok
+          cmd: 0x0B           # UP
+          packet_id: 0xD3F5D3 # Nahradiť vaším ID
+          channel: 9          # Kanál 9 pre pergolu
+    close_action:
+      - lambda: |-
+          // Dynamicky prepíše čas trvania v milisekundách pred spustením
+          auto duration = id(global_pergola_duration) * 1000;
+          id(pergola_roof).set_open_duration(duration);
+          id(pergola_roof).set_close_duration(duration);
+      - script.execute:
+          id: transmit_aok
+          cmd: 0x43           # DOWN
+          packet_id: 0xD3F5D3 # Nahradiť vaším ID
+          channel: 9
+    stop_action:
+      - script.execute:
+          id: transmit_aok
+          cmd: 0x23           # STOP
+          packet_id: 0xD3F5D3 # Nahradiť vaším ID
+          channel: 9
+    open_duration: 20s
+    close_duration: 20s 
+
+  # Všetky rolety (kanál 0)
+  - platform: time_based
+    name: "Všetky Rolety"
+    id: all_blinds
+    has_built_in_endstop: true
+    assumed_state: true
+    open_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(all_blinds).set_open_duration(duration);
+          id(all_blinds).set_close_duration(duration);
+      - script.execute:
+          id: dooya_open
+          channel: 0
+      - cover.open: blind_1
+      - cover.open: blind_2
+      - cover.open: blind_3
+    close_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(all_blinds).set_open_duration(duration);
+          id(all_blinds).set_close_duration(duration);
+      - script.execute:
+          id: dooya_close
+          channel: 0
+      - cover.close: blind_1
+      - cover.close: blind_2
+      - cover.close: blind_3
+    stop_action:
+      - script.execute:
+          id: dooya_stop
+          channel: 0
+      - cover.stop: blind_1
+      - cover.stop: blind_2
+      - cover.stop: blind_3
+    open_duration: 45s
+    close_duration: 45s
+
+  # Roleta 1 (kanál 1)
+  - platform: time_based
+    name: "Roleta 1"
+    id: blind_1
+    has_built_in_endstop: true
+    assumed_state: true
+    open_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_1).set_open_duration(duration);
+          id(blind_1).set_close_duration(duration);
+      - script.execute:
+          id: dooya_open
+          channel: 1
+    close_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_1).set_open_duration(duration);
+          id(blind_1).set_close_duration(duration);
+      - script.execute:
+          id: dooya_close
+          channel: 1
+    stop_action:
+      - script.execute:
+          id: dooya_stop
+          channel: 1
+    open_duration: 45s
+    close_duration: 45s
+
+  # Roleta 2 (kanál 2)
+  - platform: time_based
+    name: "Roleta 2"
+    id: blind_2
+    has_built_in_endstop: true
+    assumed_state: true
+    open_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_2).set_open_duration(duration);
+          id(blind_2).set_close_duration(duration);
+      - script.execute:
+          id: dooya_open
+          channel: 2
+    close_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_2).set_open_duration(duration);
+          id(blind_2).set_close_duration(duration);
+      - script.execute:
+          id: dooya_close
+          channel: 2
+    stop_action:
+      - script.execute:
+          id: dooya_stop
+          channel: 2
+    open_duration: 45s
+    close_duration: 45s
+
+  # Roleta 3 (kanál 3)
+  - platform: time_based
+    name: "Roleta 3"
+    id: blind_3
+    has_built_in_endstop: true
+    assumed_state: true
+    open_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_3).set_open_duration(duration);
+          id(blind_3).set_close_duration(duration);
+      - script.execute:
+          id: dooya_open
+          channel: 3
+    close_action:
+      - lambda: |-
+          auto duration = id(global_blind_duration) * 1000;
+          id(blind_3).set_open_duration(duration);
+          id(blind_3).set_close_duration(duration);
+      - script.execute:
+          id: dooya_close
+          channel: 3
+    stop_action:
+      - script.execute:
+          id: dooya_stop
+          channel: 3
+    open_duration: 45s
+    close_duration: 45s
+
+
+script:
+  - id: transmit_aok
+    parameters:
+      cmd: int
+      packet_id: int
+      channel: int
+    then:
+      - lambda: 'id(is_transmitting) = true;'
+      - lambda: |-
+          // A-OK protokol: [Start 8b=0xA3][ID 24b][Address 16b][Command 8b][Checksum 8b]
+          uint32_t remote_id = packet_id;
+          uint16_t address = 1 << (channel - 1);  // Konverzia kanálu na bitové pole
+          uint8_t command = cmd;
+          
+          // Výpočet checksum
+          uint8_t checksum = ((remote_id >> 16) & 0xFF) + ((remote_id >> 8) & 0xFF) + (remote_id & 0xFF);
+          checksum += ((address >> 8) & 0xFF) + (address & 0xFF);
+          checksum += command;
+          
+          // Zostav 64-bitový paket
+          uint64_t packet = 0xA3;
+          packet = (packet << 24) | (remote_id & 0xFFFFFF);
+          packet = (packet << 16) | (address & 0xFFFF);
+          packet = (packet << 8) | command;
+          packet = (packet << 8) | checksum;
+          
+          ESP_LOGI("A-OK_TX", "Sending A-OK: ID=0x%06X, CH=%d, CMD=0x%02X (%s), CHK=0x%02X",
+                   remote_id, channel, command,
+                   (command == 0x0B ? "UP" : 
+                    command == 0x43 ? "DOWN" : 
+                    command == 0x23 ? "STOP" : 
+                    command == 0x53 ? "PROGRAM" :
+                    command == 0x12 ? "LIGHT_ON" :
+                    command == 0x13 ? "LIGHT_OFF" : "OTHER"),
+                   checksum);
+          
+          auto transmit = id(rf_transmitter).transmit();
+          auto data = transmit.get_data();
+          
+          // AGC pulz
+          data->mark(5300);
+          data->space(530);
+          
+          // 64 dátových bitov
+          for (int i = 63; i >= 0; i--) {
+            if ((packet >> i) & 1) {
+              // Bit 1: long HIGH, short LOW
+              data->mark(565);
+              data->space(270);
+            } else {
+              // Bit 0: short HIGH, long LOW
+              data->mark(270);
+              data->space(565);
+            }
+          }
+          
+          // Trailing bit (vždy 1)
+          data->mark(565);
+          data->space(270);
+          
+          // Radio silence
+          data->space(5030);
+          
+          transmit.perform();
+      - delay: 100ms  # Čas pre CC1101 prepnutie späť do RX
+      - lambda: 'id(is_transmitting) = false;'
+
+  # Dooya transmit skripty - simulujú správanie originálneho ovládača
+  # Podľa debug logu: UP/DOWN posiela 3x check1 + 4x check2, STOP posiela 3x check
+  - id: dooya_open
+    parameters:
+      channel: int
+    then:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_transmitter
+                id: 0x00BB6A83
+                channel: !lambda 'return channel;'
+                button: 1
+                check: 1
+      - repeat:
+          count: 4
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_transmitter
+                id: 0x00BB6A83
+                channel: !lambda 'return channel;'
+                button: 1
+                check: 14
+
+  - id: dooya_close
+    parameters:
+      channel: int
+    then:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_transmitter
+                id: 0x00BB6A83
+                channel: !lambda 'return channel;'
+                button: 3
+                check: 3
+      - repeat:
+          count: 4
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_transmitter
+                id: 0x00BB6A83
+                channel: !lambda 'return channel;'
+                button: 3
+                check: 12
+
+  - id: dooya_stop
+    parameters:
+      channel: int
+    then:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_transmitter
+                id: 0x00BB6A83
+                channel: !lambda 'return channel;'
+                button: 5
+                check: 5
+
+# --- Tlačidlá pre A-OK AC226-03 -------------------------
+# A-OK AC114 protokol: 65 bitov, 433.92MHz
+# Formát: [Start 8b=0xA3][ID 24b][Address 16b][Command 8b][Checksum 8b][1]
+# Commands: UP=0x0B, DOWN=0x43, STOP=0x23, PROGRAM=0x53, LIGHT_OFF=0x13, LIGHT_ON=0x12
+# Timing: AGC=5300µs HIGH + 530µs LOW, Bit0=270µs H + 565µs L, Bit1=565µs H + 270µs L
+# --- Light pre A-OK pergolu -------------------------
+light:
+  - platform: binary
+    name: "Pergola Svetlo"
+    id: pergola_light
+    output: pergola_light_output
+
+output:
+  - platform: template
+    id: pergola_light_output
+    type: binary
+    write_action:
+      - if:
+          condition:
+            lambda: 'return state;'
+          then:
+            - repeat:
+                count: 3
+                then:
+                  - script.execute:
+                      id: transmit_aok
+                      cmd: 0x12   # LIGHT_ON
+                      packet_id: 0xD3F5D3
+                      channel: 9
+                  - delay: 15ms
+          else:
+            - repeat:
+                count: 3
+                then:
+                  - script.execute:
+                      id: transmit_aok
+                      cmd: 0x13   # LIGHT_OFF
+                      packet_id: 0xD3F5D3
+                      channel: 9
+                  - delay: 15ms
+
+  
+
+### --- CC1101 Ovládacie prvky (voliteľné) ---------------------------
+globals:
+  - id: global_blind_duration
+    type: float
+    restore_value: yes
+    initial_value: '45.0'
+  
+  - id: global_pergola_duration
+    type: float
+    restore_value: yes
+    initial_value: '20.0'
+    
+  # A-OK konfigurácia - zachytené z vášho AC136-04 ovládača
+  - id: aok_remote_id
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0xD3F5D3'  # ID z vášho ovládača AC136-04
+    
+  - id: aok_channel
+    type: uint16_t
+    restore_value: yes
+    initial_value: '0x0100'  # Kanál 9 (bitové pole: 1<<8 = 0x0100 = 256)
+  
+  # Ochrana pred self-reception - ignoruj RX počas a krátko po TX
+  - id: is_transmitting
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  
+  # Debounce pre A-OK príkazy (timestamp posledného príkazu)
+  - id: last_aok_command_time
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  
+  - id: last_aok_command
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+
+number:
+  - platform: template
+    name: "Doba chodu roliet"
+    id: blind_duration_setting
+    icon: "mdi:timer-outline"
+    unit_of_measurement: "s"
+    min_value: 5
+    max_value: 120
+    step: 1
+    initial_value: 45
+    restore_value: true
+    optimistic: true
+    mode: box
+    on_value:
+      then:
+        - lambda: 'id(global_blind_duration) = x;'
+  
+  - platform: template
+    name: "Doba chodu pergoly"
+    id: pergola_duration_setting
+    icon: "mdi:timer-outline"
+    unit_of_measurement: "s"
+    min_value: 5
+    max_value: 120
+    step: 1
+    initial_value: 20
+    restore_value: true
+    optimistic: true
+    mode: box
+    on_value:
+      then:
+        - lambda: 'id(global_pergola_duration) = x;'
+
+sensor:
+  - platform: template
+    id: cc1101_sensor_rssi
+    name: "CC1101 RSSI"
+    lambda: return id(mycc1101).getRSSI();
+    update_interval: 10s
+    unit_of_measurement: dB
+  - platform: template
+    id: cc1101_sensor_rx_rssi
+    name: "CC1101 Posledný RX RSSI"
+    lambda: return id(mycc1101).last_rx_rssi;
+    update_interval: 10s
+    unit_of_measurement: dB

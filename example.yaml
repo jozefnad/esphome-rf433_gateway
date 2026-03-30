@@ -1,0 +1,219 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RF433 Gateway — Generic Example
+# ─────────────────────────────────────────────────────────────────────────────
+# This example demonstrates all features of the rf433_gw component.
+# Replace placeholder IDs with values sniffed from your real remotes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+esphome:
+  name: rf433-gateway-example
+  friendly_name: RF433 Gateway Example
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: DEBUG
+
+api:
+ota:
+  platform: esphome
+captive_portal:
+
+# ─── SPI & CC1101 ──────────────────────────────────────────────────────────
+spi:
+  clk_pin: GPIO4
+  mosi_pin: GPIO6
+  miso_pin: GPIO5
+
+cc1101:
+  cs_pin: GPIO7
+  gdo0_pin:
+    number: GPIO3
+    allow_other_uses: true
+  frequency: 433.92MHz
+  modulation_type: ASK/OOK
+  output_power: 1
+
+# ─── Remote Receiver ───────────────────────────────────────────────────────
+remote_receiver:
+  - id: rf_rx
+    pin:
+      number: GPIO3
+      allow_other_uses: true
+    dump: [raw, dooya]  # raw for debugging, dooya built-in
+    idle: 10ms
+    filter: 100us
+    tolerance: 40%
+    buffer_size: 4kb
+
+# ─── Remote Transmitter ───────────────────────────────────────────────────
+remote_transmitter:
+  - id: rf_tx
+    pin:
+      number: GPIO3
+      allow_other_uses: true
+    carrier_duty_percent: 100%
+    on_transmit:
+      then:
+        - cc1101.begin_tx
+    on_complete:
+      then:
+        - cc1101.begin_rx
+
+# ─── RF433 Gateway Component ──────────────────────────────────────────────
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [rf433_gw]
+
+rf433_gw:
+  receiver_id: rf_rx
+  debounce: 500ms
+
+  # A-OK receive triggers (all filters optional)
+  on_aok:
+    # Log everything
+    - then:
+        - lambda: |-
+            ESP_LOGI("example", "A-OK id=0x%06X addr=0x%04X cmd=0x%02X",
+                     x.remote_id, x.address, x.command);
+
+    # Filter: specific remote + command
+    - remote_id: 0xABCDEF
+      command: UP
+      then:
+        - logger.log: "My remote pressed UP"
+
+    # Filter: specific remote + channel + DOWN
+    - remote_id: 0xABCDEF
+      address: 0x0001
+      command: DOWN
+      then:
+        - cover.close: example_blind
+
+  # Nexus/Solight TE81 receive triggers
+  on_nexus:
+    # Log all readings
+    - then:
+        - lambda: |-
+            ESP_LOGI("example", "Nexus id=%d ch=%d temp=%.1f hum=%d%%",
+                     x.id, x.channel, x.temperature, x.humidity);
+
+    # Filter: specific sensor
+    - sensor_id: 42
+      channel: 1
+      then:
+        - lambda: |-
+            ESP_LOGI("example", "Outdoor sensor: %.1f°C %d%%",
+                     x.temperature, x.humidity);
+
+# ─── Example Cover: A-OK blind (using named commands) ─────────────────────
+cover:
+  - platform: template
+    name: "Example Blind"
+    id: example_blind
+    device_class: blind
+    optimistic: true
+    open_action:
+      - rf433_gw.transmit_aok:
+          transmitter_id: rf_tx
+          remote_id: 0xABCDEF
+          address: 0x0001       # Channel 1
+          command: UP
+          repeat:
+            times: 3
+            wait_time: 25ms
+    stop_action:
+      - rf433_gw.transmit_aok:
+          transmitter_id: rf_tx
+          remote_id: 0xABCDEF
+          address: 0x0001
+          command: STOP
+    close_action:
+      - rf433_gw.transmit_aok:
+          transmitter_id: rf_tx
+          remote_id: 0xABCDEF
+          address: 0x0001
+          command: DOWN
+          repeat:
+            times: 3
+            wait_time: 25ms
+
+  # Example: Dooya blind (using ESPHome built-in support)
+  - platform: template
+    name: "Example Dooya Blind"
+    id: example_dooya
+    device_class: blind
+    optimistic: true
+    open_action:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_tx
+                id: 0x00BB6A83
+                channel: 1
+                button: 1
+                check: 1
+    close_action:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_tx
+                id: 0x00BB6A83
+                channel: 1
+                button: 3
+                check: 3
+    stop_action:
+      - repeat:
+          count: 3
+          then:
+            - remote_transmitter.transmit_dooya:
+                transmitter_id: rf_tx
+                id: 0x00BB6A83
+                channel: 1
+                button: 5
+                check: 5
+
+# ─── Example Light: A-OK RF light ────────────────────────────────────────
+light:
+  - platform: binary
+    name: "Example RF Light"
+    id: example_light
+    output: example_light_output
+
+output:
+  - platform: template
+    id: example_light_output
+    type: binary
+    write_action:
+      - if:
+          condition:
+            lambda: 'return state;'
+          then:
+            - rf433_gw.transmit_aok:
+                transmitter_id: rf_tx
+                remote_id: 0xABCDEF
+                address: 0x0100    # Channel 9
+                command: LIGHT_ON
+                repeat:
+                  times: 3
+                  wait_time: 15ms
+          else:
+            - rf433_gw.transmit_aok:
+                transmitter_id: rf_tx
+                remote_id: 0xABCDEF
+                address: 0x0100
+                command: LIGHT_OFF
+                repeat:
+                  times: 3
+                  wait_time: 15ms
