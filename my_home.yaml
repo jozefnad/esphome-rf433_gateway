@@ -51,11 +51,26 @@ wifi:
     password: !secret wifi_ap_password
 
 logger:
-  level: INFO
+  level: DEBUG
   logs:
     esp32_ble_tracker: WARN
     bluetooth_proxy: WARN
     esp32_ble_client: WARN
+    esp32_ble: WARN
+    ble_client: WARN
+    wifi: WARN
+    api: WARN
+    api.connection: WARN
+    mdns: WARN
+    sensor: WARN
+    binary_sensor: WARN
+    cover: WARN
+    light: WARN
+    switch: WARN
+    number: WARN
+    time_based.cover: WARN
+    remote_receiver: INFO
+    remote_transmitter: INFO
     rf433_gw: DEBUG
     rf433_gw.nexus: DEBUG
     rf433_gw.aok: WARN
