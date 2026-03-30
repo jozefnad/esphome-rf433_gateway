@@ -63,12 +63,15 @@ class RF433GWReceiver : public Component,
     // Self-reception protection
     if (is_transmitting_) return false;
 
-    // Try A-OK decode (src is passed by value, each decode gets own copy)
-    {
+    // Quick size check — skip tiny buffers (noise)
+    int32_t buf_size = src.size();
+    if (buf_size < 20) return false;
+
+    // Try A-OK decode — needs at least ~130 items (sync + 64 bits × 2)
+    if (buf_size >= 130) {
       AOKProtocol aok_proto;
       auto aok_data = aok_proto.decode(src);
       if (aok_data.has_value()) {
-        // Debounce: same remote+command within debounce window
         uint32_t now = millis();
         if (aok_data->remote_id != last_aok_remote_id_ ||
             aok_data->command != last_aok_command_ ||
@@ -81,16 +84,14 @@ class RF433GWReceiver : public Component,
           for (auto *trigger : aok_triggers_)
             trigger->process(*aok_data);
         }
-        // Don't return — let other listeners process too
       }
     }
 
-    // Try Nexus decode (fresh copy of src via pass-by-value in decode)
-    {
+    // Try Nexus decode — needs at least ~73 items (sync + 36 bits × 2)
+    if (buf_size >= 73) {
       NexusProtocol nexus_proto;
       auto nexus_data = nexus_proto.decode(src);
       if (nexus_data.has_value()) {
-        // Debounce: same sensor within debounce window
         uint32_t now = millis();
         if (nexus_data->id != last_nexus_id_ ||
             nexus_data->channel != last_nexus_ch_ ||
@@ -110,7 +111,10 @@ class RF433GWReceiver : public Component,
     return false;
   }
 
-  void set_transmitting(bool v) { is_transmitting_ = v; }
+  void set_transmitting(bool v) {
+    is_transmitting_ = v;
+    ESP_LOGD(TAG_GW, "set_transmitting(%s)", v ? "true" : "false");
+  }
   void set_debounce(uint32_t ms) { debounce_ms_ = ms; }
 
   void add_aok_trigger(AOKTrigger *t) { aok_triggers_.push_back(t); }
@@ -148,15 +152,18 @@ class AOKTransmitAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(uint32_t, send_wait)
 
   void play(const Ts &...x) override {
-    // Self-reception protection: mark as transmitting
-    if (receiver_ != nullptr) {
-      receiver_->set_transmitting(true);
-    }
-
     AOKData data;
     data.remote_id = this->remote_id_.value(x...);
     data.address   = this->address_.value(x...);
     data.command   = this->command_.value(x...);
+
+    ESP_LOGI(TAG_GW, "TX A-OK: remote_id=0x%06X addr=0x%04X cmd=0x%02X",
+             data.remote_id, data.address, data.command);
+
+    // Self-reception protection: mark as transmitting
+    if (receiver_ != nullptr) {
+      receiver_->set_transmitting(true);
+    }
 
     auto call = this->transmitter_->transmit();
     AOKProtocol proto;
@@ -168,6 +175,8 @@ class AOKTransmitAction : public Action<Ts...> {
       call.set_send_wait(this->send_wait_.value(x...));
     }
     call.perform();
+
+    ESP_LOGD(TAG_GW, "TX A-OK: perform() completed");
 
     // Release self-reception protection
     if (receiver_ != nullptr) {

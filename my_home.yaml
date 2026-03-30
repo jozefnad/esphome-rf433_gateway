@@ -51,7 +51,14 @@ wifi:
     password: !secret wifi_ap_password
 
 logger:
-  level: INFO
+  level: DEBUG
+  logs:
+    # Suppress noisy components at INFO to keep logs readable
+    esp32_ble_tracker: WARN
+    bluetooth_proxy: WARN
+    esp32_ble_client: WARN
+    sensor: INFO
+    wifi: INFO
 
 api:
   encryption:
@@ -96,11 +103,11 @@ remote_receiver:
       allow_other_uses: true
     dump:
       - dooya
-      # - raw  # odkomentovať pre diagnostiku
+      - raw  # diagnostika — odkomentovať po overení Nexus
     idle: 10ms
     filter: 100us
     tolerance: 40%
-    buffer_size: 4kb
+    buffer_size: 8kb
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────
 remote_transmitter:
