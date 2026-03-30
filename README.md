@@ -47,9 +47,7 @@ your-esphome-config/
 │       ├── __init__.py
 │       ├── rf433_gw.h
 │       ├── aok.h
-│       ├── aok.cpp
-│       ├── nexus.h
-│       └── nexus.cpp
+│       └── nexus.h
 ├── my_home.yaml
 └── secrets.yaml
 ```
