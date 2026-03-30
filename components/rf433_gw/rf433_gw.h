@@ -54,13 +54,14 @@ class NexusTrigger : public Trigger<NexusData> {
 };
 
 // ─── RF433 Gateway Receiver ────────────────────────────────────────────────
-// Registered as a RemoteReceiverListener, decodes all supported protocols
+// Registered as a RemoteReceiverListener, decodes all supported protocols.
+// Always returns false so built-in listeners (Dooya binary_sensor) can also process.
 class RF433GWReceiver : public Component,
                         public remote_base::RemoteReceiverListener {
  public:
   bool on_receive(remote_base::RemoteReceiveData src) override {
     // Self-reception protection
-    if (is_transmitting_) return true;
+    if (is_transmitting_) return false;
 
     // Try A-OK decode (src is passed by value, each decode gets own copy)
     {
@@ -69,19 +70,18 @@ class RF433GWReceiver : public Component,
       if (aok_data.has_value()) {
         // Debounce: same remote+command within debounce window
         uint32_t now = millis();
-        if (aok_data->remote_id == last_aok_remote_id_ &&
-            aok_data->command == last_aok_command_ &&
-            (now - last_aok_time_) < debounce_ms_) {
-          return true;
-        }
-        last_aok_remote_id_ = aok_data->remote_id;
-        last_aok_command_ = aok_data->command;
-        last_aok_time_ = now;
+        if (aok_data->remote_id != last_aok_remote_id_ ||
+            aok_data->command != last_aok_command_ ||
+            (now - last_aok_time_) >= debounce_ms_) {
+          last_aok_remote_id_ = aok_data->remote_id;
+          last_aok_command_ = aok_data->command;
+          last_aok_time_ = now;
 
-        aok_proto.dump(*aok_data);
-        for (auto *trigger : aok_triggers_)
-          trigger->process(*aok_data);
-        return true;
+          aok_proto.dump(*aok_data);
+          for (auto *trigger : aok_triggers_)
+            trigger->process(*aok_data);
+        }
+        // Don't return — let other listeners process too
       }
     }
 
@@ -92,22 +92,21 @@ class RF433GWReceiver : public Component,
       if (nexus_data.has_value()) {
         // Debounce: same sensor within debounce window
         uint32_t now = millis();
-        if (nexus_data->id == last_nexus_id_ &&
-            nexus_data->channel == last_nexus_ch_ &&
-            (now - last_nexus_time_) < debounce_ms_) {
-          return true;
-        }
-        last_nexus_id_ = nexus_data->id;
-        last_nexus_ch_ = nexus_data->channel;
-        last_nexus_time_ = now;
+        if (nexus_data->id != last_nexus_id_ ||
+            nexus_data->channel != last_nexus_ch_ ||
+            (now - last_nexus_time_) >= debounce_ms_) {
+          last_nexus_id_ = nexus_data->id;
+          last_nexus_ch_ = nexus_data->channel;
+          last_nexus_time_ = now;
 
-        nexus_proto.dump(*nexus_data);
-        for (auto *trigger : nexus_triggers_)
-          trigger->process(*nexus_data);
-        return true;
+          nexus_proto.dump(*nexus_data);
+          for (auto *trigger : nexus_triggers_)
+            trigger->process(*nexus_data);
+        }
       }
     }
 
+    // Always return false — allow built-in Dooya listener and dump to proceed
     return false;
   }
 
