@@ -144,24 +144,17 @@ class NexusProtocol {
       return {};
     }
 
-    ESP_LOGD(TAG_NEXUS, "parsed: id=0x%02X flags=0x%X temp_raw=0x%03X nib=0x%X hum_raw=0x%02X extra=0x%X",
-             b_id, b_flags, temp_raw, nib_x, hum_raw, extra);
+    ESP_LOGD(TAG_NEXUS, "parsed: id=0x%02X flags=0x%X temp_raw=0x%03X(%d) nib=0x%X hum_raw=0x%02X extra=0x%X",
+             b_id, b_flags, temp_raw, temp_signed, nib_x, hum_raw, extra);
 
     return data;
   }
 
   void dump(const NexusData &data) {
-    if (data.humidity > 0) {
-      ESP_LOGI(TAG_NEXUS, "Received TE81: id=%d ch=%d battery=%s temp=%.1f°C humidity=%d%%",
-               data.id, data.channel,
-               data.battery_ok ? "OK" : "LOW",
-               data.temperature, data.humidity);
-    } else {
-      ESP_LOGI(TAG_NEXUS, "Received TE81: id=%d ch=%d battery=%s temp=%.1f°C (no humidity)",
-               data.id, data.channel,
-               data.battery_ok ? "OK" : "LOW",
-               data.temperature);
-    }
+    ESP_LOGI(TAG_NEXUS, "Received TE81: id=%d ch=%d battery=%s temp=%.1f°C humidity=%d%%",
+             data.id, data.channel,
+             data.battery_ok ? "OK" : "LOW",
+             data.temperature, data.humidity);
   }
 };
 
