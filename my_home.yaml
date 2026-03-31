@@ -71,8 +71,8 @@ logger:
     time_based.cover: WARN
     remote_receiver: INFO
     remote_transmitter: INFO
-    rf433_gw: DEBUG
-    rf433_gw.nexus: DEBUG
+    rf433_gw: INFO
+    rf433_gw.nexus: INFO
     rf433_gw.aok: WARN
 
 api:
@@ -125,7 +125,6 @@ remote_receiver:
         open_drain: false
     dump:
       - dooya
-      - raw  # dočasne zapnuté pre diagnostiku TE81
     idle: 10ms   # Nexus inter-frame gap is 6-9ms with CC1101 OOK stretch; 10ms keeps frames in one buffer
     filter: 100us
     tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
@@ -219,13 +218,12 @@ rf433_gw:
       then:
         - light.turn_off: pergola_light
 
-  # ── Nexus/Solight TE81 RX ─────────────────────────────────────────────
+  # ── Solight TE81 RX → HA senzory ───────────────────────────────────────
   on_nexus:
     - then:
         - lambda: |-
-            ESP_LOGI("nexus", "id=%d ch=%d temp=%.1f°C hum=%d%% batt=%s",
-                     x.id, x.channel, x.temperature, x.humidity,
-                     x.battery_ok ? "OK" : "LOW");
+            id(te81_temperature).publish_state(x.temperature);
+            id(te81_humidity).publish_state(x.humidity);
 
 # ─── Dooya RX: fyzický ovládač → HA synchronizácia ────────────────────────
 binary_sensor:
@@ -705,3 +703,23 @@ sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
+
+  # Solight TE81 — vonkajšia teplota
+  - platform: template
+    name: "Vonkajšia Teplota"
+    id: te81_temperature
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+
+  # Solight TE81 — vonkajšia vlhkosť
+  - platform: template
+    name: "Vonkajšia Vlhkosť"
+    id: te81_humidity
+    device_class: humidity
+    state_class: measurement
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:water-percent"
