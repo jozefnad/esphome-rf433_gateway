@@ -23,9 +23,15 @@ struct NexusData {
   }
 };
 
-// ─── Nexus/Solight TE81 Timing ─────────────────────────────────────────────
-// PPM modulation: ~500 µs pulse, short gap ~1000 µs (bit 0), long gap ~2000 µs (bit 1)
-// Sync: ~500 µs pulse + ~4000 µs gap
+// ─── Nexus/Solight TE81 Timing (CC1101 OOK reality) ────────────────────────
+// CC1101 OOK demodulation stretches Nexus timing due to AGC/threshold drift:
+//   Marks (pulses): ~150–750 µs (variable, OOK threshold dependent)
+//   Bit 0 spaces:   ~1600–2500 µs (rtl_433 expects ~1000 µs)
+//   Bit 1 spaces:   ~3500–4600 µs (rtl_433 expects ~2000 µs)
+//   Inter-frame gap: ~6000–9000 µs → matches idle:7ms so each buffer ≈ 1 frame
+// With idle:7ms, each frame arrives in its own buffer (72-82 elements).
+// Decoder tries multiple offsets from buffer start since frame boundary may
+// include trailing elements from previous frame.
 // Decoder uses direct raw-array access (no expect_mark / expect_space) for speed.
 
 // ─── Nexus Protocol (RX-only decoder) — header-only ────────────────────────
@@ -38,61 +44,76 @@ class NexusProtocol {
  public:
   optional<NexusData> decode(remote_base::RemoteReceiveData src) {
     const int32_t n = src.size();
-    if (n < 74) return {};
+    if (n < 72) return {};
     ESP_LOGD(TAG_NEXUS, "decode attempt: buffer n=%d", n);
 
-    // Retry loop: TE81/Nexus sensors send 36 bits 12× per transmission.
-    // With idle:7ms, ESPHome captures all frames in one big buffer (~888 items).
-    // If the first frame is corrupted (AGC settling, noise), keep scanning for
-    // the next valid sync+frame.  Matches rtl_433's repeated-row approach.
-    int scan_pos = 0;
+    // With idle:7ms ≈ inter-frame gap, each buffer holds roughly one Nexus frame.
+    // A 36-bit PPM frame = 72 elements (mark+space per bit) + possibly a trailing mark.
+    // Buffer may start mid-frame if the inter-frame gap was slightly shorter than idle.
+    // Try decoding from multiple even offsets to find the real frame start.
+    // Also try after any large gap (>5000µs) inside the buffer.
 
-    while (scan_pos <= n - 74) {
-      // ── Find sync: mark 300–700 µs + space –2500 to –6000 µs ──────────
-      int idx = scan_pos;
-      bool sync_found = false;
-      while (idx <= n - 74) {
-        if (src[idx] > 300 && src[idx] < 700 &&
-            idx + 1 < n && src[idx + 1] < -2500 && src[idx + 1] > -6000) {
-          idx += 2;  // past sync mark + gap
-          sync_found = true;
-          break;
+    // Collect candidate start positions
+    int starts[20];
+    int num_starts = 0;
+
+    // Always try offset 0
+    if (src[0] > 0) {
+      starts[num_starts++] = 0;
+    }
+
+    // Try even offsets 2, 4, 6, 8 (skip partial leading data)
+    for (int off = 2; off <= 8 && off <= n - 72; off += 2) {
+      if (src[off] > 0) {
+        starts[num_starts++] = off;
+      }
+    }
+
+    // Also try after any large negative gap (inter-frame separator inside buffer)
+    for (int i = 0; i < n - 72 && num_starts < 18; i++) {
+      if (src[i] < -5000) {
+        int next = i + 1;
+        if (next <= n - 72 && src[next] > 0) {
+          // Avoid duplicates
+          bool dup = false;
+          for (int j = 0; j < num_starts; j++) {
+            if (starts[j] == next) { dup = true; break; }
+          }
+          if (!dup) starts[num_starts++] = next;
         }
-        idx++;
       }
-      if (!sync_found) {
-        ESP_LOGD(TAG_NEXUS, "no sync found (scanned %d of %d items)", idx, n);
-        return {};
-      }
+    }
 
-      // Resume scanning from here if this frame fails
-      scan_pos = idx;
+    for (int si = 0; si < num_starts; si++) {
+      int idx = starts[si];
 
       // ── Decode 36 bits (PPM distance coding) ──────────────────────────
-      // rtl_433 parameters: short_width=1000, long_width=2000, gap_limit=3000
-      // bit 0: mark ~500 µs + space ~1000 µs
-      // bit 1: mark ~500 µs + space ~2000 µs
-      // gap > 3000 µs = sync/reset (NOT a data bit) → abort this frame
+      // CC1101 OOK stretched timing:
+      //   bit 0: mark ~150-750 µs + space ~1600-2500 µs
+      //   bit 1: mark ~150-750 µs + space ~3500-4600 µs
+      //   threshold: |space| > 3000 µs → bit 1, else bit 0
+      //   gap_limit: |space| > 5000 µs = inter-frame (NOT a data bit)
       uint64_t bits = 0;
       bool frame_ok = true;
       for (int i = 35; i >= 0; i--) {
         if (idx >= n) { frame_ok = false; break; }
         int32_t mark = src[idx++];
-        if (mark < 200 || mark > 800) { frame_ok = false; break; }
+        if (mark < 100 || mark > 900) { frame_ok = false; break; }
 
         if (idx < n && src[idx] < 0) {
           int32_t space = src[idx];
-          // gap_limit: reject spaces beyond –3000 µs (sync/reset gap, not data)
-          if (space < -3000) { frame_ok = false; break; }
+          // gap_limit: reject spaces beyond –5000 µs (inter-frame gap, not data)
+          if (space < -5000) { frame_ok = false; break; }
           idx++;
-          if (space < -1500) {
+          if (space < -3000) {
             bits |= (1ULL << i);  // long gap → bit 1
           }
+          // else: short gap → bit 0 (already 0)
         }
         // No space at end of buffer → bit stays 0 (last bit of last frame)
       }
       if (!frame_ok) {
-        ESP_LOGD(TAG_NEXUS, "frame decode failed at idx=%d of %d", idx, n);
+        ESP_LOGD(TAG_NEXUS, "frame decode failed at start=%d idx=%d of %d", starts[si], idx, n);
         continue;
       }
 

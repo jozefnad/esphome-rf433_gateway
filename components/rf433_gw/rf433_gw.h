@@ -89,10 +89,10 @@ class RF433GWReceiver : public Component,
       }
     }
 
-    // Try Nexus decode — needs at least 74 items (sync + 36 bits × 2)
+    // Try Nexus decode — needs at least 72 items (36 bits × 2 elements each)
     // Skip if A-OK already matched (different protocol, can't be both)
     bool nexus_matched = false;
-    if (!aok_matched && buf_size >= 74) {
+    if (!aok_matched && buf_size >= 72) {
       NexusProtocol nexus_proto;
       auto nexus_data = nexus_proto.decode(src);
       if (nexus_data.has_value()) {

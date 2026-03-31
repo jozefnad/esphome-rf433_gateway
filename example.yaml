@@ -64,10 +64,10 @@ remote_receiver:
         pullup: true
         open_drain: false
     dump: [raw, dooya]  # raw for debugging, dooya built-in
-    idle: 7ms
+    idle: 10ms   # Nexus inter-frame gap is 6-9ms with CC1101 OOK stretch
     filter: 100us
     tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
-    buffer_size: 4kb
+    buffer_size: 8kb
 
 # ─── Remote Transmitter ───────────────────────────────────────────────────
 remote_transmitter:

@@ -126,10 +126,10 @@ remote_receiver:
     dump:
       - dooya
       - raw  # dočasne zapnuté pre diagnostiku TE81
-    idle: 7ms
+    idle: 10ms   # Nexus inter-frame gap is 6-9ms with CC1101 OOK stretch; 10ms keeps frames in one buffer
     filter: 100us
     tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
-    buffer_size: 4kb
+    buffer_size: 8kb   # 12 Nexus frames × ~73 elements ≈ 3.5kb, plus Dooya/A-OK
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────
 remote_transmitter:
