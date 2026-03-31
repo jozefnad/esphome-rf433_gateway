@@ -64,9 +64,9 @@ remote_receiver:
         pullup: true
         open_drain: false
     dump: [raw, dooya]  # raw for debugging, dooya built-in
-    idle: 10ms   # Nexus inter-frame gap is 6-9ms with CC1101 OOK stretch
+    idle: 10ms   # TE81 inter-frame gap is 6-9ms with CC1101 OOK stretch
     filter: 100us
-    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
+    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/TE81 use direct array access
     buffer_size: 8kb
 
 # ─── Remote Transmitter ───────────────────────────────────────────────────
@@ -123,12 +123,12 @@ rf433_gw:
       then:
         - cover.close: example_blind
 
-  # Nexus/Solight TE81 receive triggers
-  on_nexus:
+  # Solight TE81 receive triggers
+  on_te81:
     # Log all readings
     - then:
         - lambda: |-
-            ESP_LOGI("example", "Nexus id=%d ch=%d temp=%.1f hum=%d%%",
+            ESP_LOGI("example", "TE81 id=%d ch=%d temp=%.1f hum=%d%%",
                      x.id, x.channel, x.temperature, x.humidity);
 
     # Filter: specific sensor

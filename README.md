@@ -9,7 +9,7 @@ ESPHome external component for Home Assistant.
 |---|---|---|---|
 | **A-OK** | ✅ | ✅ | Motorised blinds, pergolas, RF lights (AC114/AC226 series) |
 | **Dooya** | ✅ | ✅ | Roller blinds (DC2702 remotes) — uses ESPHome built-in support |
-| **Nexus / Solight TE81** | — | ✅ | Temperature/humidity sensors (TE81, TE82S, NC-7345, NX-3980) |
+| **Solight TE81** | — | ✅ | Temperature/humidity sensor (custom 40-bit protocol) |
 
 ## Hardware
 
@@ -47,7 +47,7 @@ your-esphome-config/
 │       ├── __init__.py
 │       ├── rf433_gw.h
 │       ├── aok.h
-│       └── nexus.h
+│       └── solight_te81.h
 ├── my_home.yaml
 └── secrets.yaml
 ```
@@ -150,7 +150,7 @@ rf433_gw:
       then:
         - cover.close: my_blind
 
-  on_nexus:
+  on_te81:
     - sensor_id: 42
       channel: 1
       then:
@@ -210,7 +210,7 @@ binary_sensor:
 | `receiver_id` | **yes** | — | ID of the `remote_receiver` component |
 | `debounce` | no | `500ms` | Debounce window for duplicate packet suppression |
 | `on_aok` | no | — | Automation triggers for received A-OK packets |
-| `on_nexus` | no | — | Automation triggers for received Nexus packets |
+| `on_te81` | no | — | Automation triggers for received Solight TE81 packets |
 
 ### `on_aok:` trigger filters (all optional)
 
@@ -223,14 +223,14 @@ binary_sensor:
 The automation receives an `x` variable of type `AOKData` with fields:
 `x.remote_id`, `x.address`, `x.command`.
 
-### `on_nexus:` trigger filters (all optional)
+### `on_te81:` trigger filters (all optional)
 
 | Filter | Type | Description |
 |---|---|---|
 | `sensor_id` | int (0–255) | 8-bit sensor ID (changes on battery swap) |
 | `channel` | int (1–4) | Sensor channel |
 
-The automation receives an `x` variable of type `NexusData` with fields:
+The automation receives an `x` variable of type `SolightTE81Data` with fields:
 `x.id`, `x.channel`, `x.battery_ok`, `x.test_mode`, `x.temperature`, `x.humidity`.
 
 ### `rf433_gw.transmit_aok` action
@@ -265,7 +265,7 @@ components/rf433_gw/
 ├── __init__.py              ← ESPHome Python schema & code generation
 ├── rf433_gw.h               ← Receiver, triggers, transmit action (C++)
 ├── aok.h                    ← A-OK protocol: encode, decode, timing
-└── nexus.h                  ← Nexus/Solight TE81 decoder
+└── solight_te81.h           ← Solight TE81 decoder (custom 40-bit protocol)
 ```
 
 All code is **header-only** (no .cpp files) for compatibility with ESP-IDF build.
@@ -335,24 +335,24 @@ Before considering everything 100% functional, test these with actual devices:
 4. **Dooya check values** — The `check: 14` and `check: 12` values in the Dooya TX
    scripts were captured from your specific DC2702 remote. These are preserved as-is.
 
-### Nexus / Solight TE81
+### Solight TE81
 
-5. **Nexus timing values** — The decoder uses timing from `rtl_433` (pulse: 500µs,
-   short gap: 1000µs, long gap: 2000µs, sync gap: 4000µs). These are well-documented
-   but ESPHome's `remote_receiver` tolerance of 40% should handle natural variation.
+5. **TE81 timing values** — The decoder uses CC1101 OOK stretched timing (pulse: ~500µs,
+   short gap: ~1800µs, long gap: ~4000µs, sync gap: ~7500µs). These are empirically
+   measured from a real TE81 sensor via CC1101 async OOK capture.
    If the sensor is not detected, try:
    - Increasing `buffer_size` to `8kb`
    - Decreasing `idle` to `5ms`
    - Adding `- raw` to `dump:` and checking the pulse timings manually
 
-6. **Nexus sensor ID** — The 8-bit ID changes when you replace the battery. After
-   first successful decode, note the ID from the log and add a filtered `on_nexus:`
+6. **TE81 sensor ID** — The 8-bit ID changes when you replace the battery. After
+   first successful decode, note the ID from the log and add a filtered `on_te81:`
    trigger.
 
-7. **Filter bandwidth** — The config uses `filter_bandwidth: 540kHz` (matching the
-   original). For Nexus sensors that send at a lower rate, the default 203kHz might
-   work better. If you have issues receiving Nexus while Dooya/A-OK works fine,
-   try removing the `filter_bandwidth` setting.
+7. **Filter bandwidth** — The config uses `filter: 812khz` (widened for off-frequency
+   TE81 sensors). For Solight sensors that send at a lower rate, narrower settings might
+   work better. If you have issues receiving TE81 while Dooya/A-OK works fine,
+   try adjusting the `filter` setting.
 
 ### Nice to have
 

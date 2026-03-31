@@ -4,7 +4,7 @@
 #include "esphome/core/automation.h"
 #include "esphome/components/remote_base/remote_base.h"
 #include "aok.h"
-#include "nexus.h"
+#include "solight_te81.h"
 
 namespace esphome {
 namespace rf433_gw {
@@ -34,10 +34,10 @@ class AOKTrigger : public Trigger<AOKData> {
   bool has_command_{false};
 };
 
-// ─── Nexus Trigger ─────────────────────────────────────────────────────────
-class NexusTrigger : public Trigger<NexusData> {
+// ─── Solight TE81 Trigger ─────────────────────────────────────────────────
+class SolightTE81Trigger : public Trigger<SolightTE81Data> {
  public:
-  void process(const NexusData &data) {
+  void process(const SolightTE81Data &data) {
     if (has_id_      && data.id      != id_)      return;
     if (has_channel_ && data.channel != channel_) return;
     this->trigger(data);
@@ -89,31 +89,31 @@ class RF433GWReceiver : public Component,
       }
     }
 
-    // Try TE81/Nexus decode — needs at least 82 items (preamble + sync + 40 bits × 2)
+    // Try TE81/Solight decode — needs at least 82 items (preamble + sync + 40 bits × 2)
     // Skip if A-OK already matched (different protocol, can't be both)
-    bool nexus_matched = false;
+    bool te81_matched = false;
     if (!aok_matched && buf_size >= 82) {
-      NexusProtocol nexus_proto;
-      auto nexus_data = nexus_proto.decode(src);
-      if (nexus_data.has_value()) {
-        nexus_matched = true;
+      SolightTE81Protocol te81_proto;
+      auto te81_data = te81_proto.decode(src);
+      if (te81_data.has_value()) {
+        te81_matched = true;
         uint32_t now = millis();
-        if (nexus_data->id != last_nexus_id_ ||
-            nexus_data->channel != last_nexus_ch_ ||
-            (now - last_nexus_time_) >= debounce_ms_) {
-          last_nexus_id_ = nexus_data->id;
-          last_nexus_ch_ = nexus_data->channel;
-          last_nexus_time_ = now;
+        if (te81_data->id != last_te81_id_ ||
+            te81_data->channel != last_te81_ch_ ||
+            (now - last_te81_time_) >= debounce_ms_) {
+          last_te81_id_ = te81_data->id;
+          last_te81_ch_ = te81_data->channel;
+          last_te81_time_ = now;
 
-          nexus_proto.dump(*nexus_data);
-          for (auto *trigger : nexus_triggers_)
-            trigger->process(*nexus_data);
+          te81_proto.dump(*te81_data);
+          for (auto *trigger : te81_triggers_)
+            trigger->process(*te81_data);
         }
       }
     }
 
     // Log unmatched packets for protocol identification (TE81 diagnosis)
-    if (!aok_matched && !nexus_matched && buf_size >= 60) {
+    if (!aok_matched && !te81_matched && buf_size >= 60) {
       int cnt = buf_size < 20 ? buf_size : 20;
       char timings[300];
       int pos = 0;
@@ -134,11 +134,11 @@ class RF433GWReceiver : public Component,
   void set_debounce(uint32_t ms) { debounce_ms_ = ms; }
 
   void add_aok_trigger(AOKTrigger *t) { aok_triggers_.push_back(t); }
-  void add_nexus_trigger(NexusTrigger *t) { nexus_triggers_.push_back(t); }
+  void add_te81_trigger(SolightTE81Trigger *t) { te81_triggers_.push_back(t); }
 
  protected:
   std::vector<AOKTrigger *> aok_triggers_;
-  std::vector<NexusTrigger *> nexus_triggers_;
+  std::vector<SolightTE81Trigger *> te81_triggers_;
   bool is_transmitting_{false};
   uint32_t debounce_ms_{500};
 
@@ -147,10 +147,10 @@ class RF433GWReceiver : public Component,
   uint8_t last_aok_command_{0};
   uint32_t last_aok_time_{0};
 
-  // Nexus debounce state
-  uint8_t last_nexus_id_{0};
-  uint8_t last_nexus_ch_{0};
-  uint32_t last_nexus_time_{0};
+  // Solight TE81 debounce state
+  uint8_t last_te81_id_{0};
+  uint8_t last_te81_ch_{0};
+  uint32_t last_te81_time_{0};
 };
 
 // ─── A-OK Transmit Action ──────────────────────────────────────────────────

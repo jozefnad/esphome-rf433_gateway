@@ -2,7 +2,7 @@
 
 Supported protocols:
   - A-OK (TX + RX) — motorised blinds/pergolas with optional light control
-  - Nexus / Solight TE81 (RX) — temperature/humidity sensors
+  - Solight TE81 (RX) — temperature/humidity sensors
 
 Dooya is NOT reimplemented here — ESPHome has built-in Dooya support via
 remote_transmitter.transmit_dooya and the dooya: binary_sensor platform.
@@ -12,7 +12,7 @@ Architecture:
   1. Exposes a required top-level 'rf433_gw:' YAML key.
   2. Attaches RF433GWReceiver (a RemoteReceiverListener) to an existing
      remote_receiver component via 'receiver_id:'.
-  3. Fires 'on_aok:' and 'on_nexus:' automations with optional filters.
+  3. Fires 'on_aok:' and 'on_te81:' automations with optional filters.
   4. Registers 'rf433_gw.transmit_aok' action for transmitting A-OK commands.
 
 YAML EXAMPLE:
@@ -24,7 +24,7 @@ YAML EXAMPLE:
         command: UP
         then:
           - cover.open: my_cover
-    on_nexus:
+    on_te81:
       - id: 42
         channel: 1
         then:
@@ -59,7 +59,7 @@ MULTI_CONF = True
 rf433_gw_ns = cg.esphome_ns.namespace("rf433_gw")
 
 AOKData          = rf433_gw_ns.struct("AOKData")
-NexusData        = rf433_gw_ns.struct("NexusData")
+SolightTE81Data  = rf433_gw_ns.struct("SolightTE81Data")
 RF433GWReceiver  = rf433_gw_ns.class_(
     "RF433GWReceiver",
     cg.Component,
@@ -70,9 +70,9 @@ AOKTrigger       = rf433_gw_ns.class_(
     "AOKTrigger",
     automation.Trigger.template(AOKData),
 )
-NexusTrigger     = rf433_gw_ns.class_(
-    "NexusTrigger",
-    automation.Trigger.template(NexusData),
+SolightTE81Trigger = rf433_gw_ns.class_(
+    "SolightTE81Trigger",
+    automation.Trigger.template(SolightTE81Data),
 )
 AOKTransmitAction = rf433_gw_ns.class_("AOKTransmitAction", automation.Action)
 
@@ -110,10 +110,10 @@ AOK_TRIGGER_SCHEMA = cv.Schema(
     }
 )
 
-# ─── on_nexus: trigger schema ───────────────────────────────────────────────
-NEXUS_TRIGGER_SCHEMA = cv.Schema(
+# ─── on_te81: trigger schema ───────────────────────────────────────────────
+TE81_TRIGGER_SCHEMA = cv.Schema(
     {
-        cv.GenerateID(CONF_ID): cv.declare_id(NexusTrigger),
+        cv.GenerateID(CONF_ID): cv.declare_id(SolightTE81Trigger),
         cv.Optional(CONF_SENSOR_ID): cv.int_range(min=0, max=255),
         cv.Optional(CONF_CHANNEL): cv.int_range(min=1, max=4),
     }
@@ -131,8 +131,8 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("on_aok"): automation.validate_automation(
             AOK_TRIGGER_SCHEMA
         ),
-        cv.Optional("on_nexus"): automation.validate_automation(
-            NEXUS_TRIGGER_SCHEMA
+        cv.Optional("on_te81"): automation.validate_automation(
+            TE81_TRIGGER_SCHEMA
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
@@ -162,13 +162,13 @@ async def to_code(config):
         if CONF_COMMAND in trig_conf:
             cg.add(trig.set_command(trig_conf[CONF_COMMAND]))
 
-    # Build on_nexus: triggers
-    for trig_conf in config.get("on_nexus", []):
+    # Build on_te81: triggers
+    for trig_conf in config.get("on_te81", []):
         trig = cg.new_Pvariable(trig_conf[CONF_ID])
         await automation.build_automation(
-            trig, [(NexusData, "x")], trig_conf
+            trig, [(SolightTE81Data, "x")], trig_conf
         )
-        cg.add(var.add_nexus_trigger(trig))
+        cg.add(var.add_te81_trigger(trig))
         if CONF_SENSOR_ID in trig_conf:
             cg.add(trig.set_id(trig_conf[CONF_SENSOR_ID]))
         if CONF_CHANNEL in trig_conf:

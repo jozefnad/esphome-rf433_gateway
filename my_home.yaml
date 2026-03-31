@@ -2,7 +2,7 @@
 # Pergola Controller — Production Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 # ESP32-C3 + CC1101 433 MHz RF Gateway
-# Protocols: A-OK (pergola + light), Dooya (rolety), Nexus/Solight TE81
+# Protocols: A-OK (pergola + light), Dooya (rolety), Solight TE81
 # BLE Proxy: enabled
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -72,7 +72,7 @@ logger:
     remote_receiver: INFO
     remote_transmitter: INFO
     rf433_gw: INFO
-    rf433_gw.nexus: INFO
+    rf433_gw.te81: INFO
     rf433_gw.aok: WARN
 
 api:
@@ -107,7 +107,7 @@ radiolib_cc1101:
     allow_other_uses: true
   frequency: 433.92mhz
   filter: 812khz       # widened from 540khz — better for off-frequency sensors (TE81)
-  bitrate: 1.6         # lowered from 2.4 — longer symbol period for Nexus slow timing
+  bitrate: 1.6         # lowered from 2.4 — longer symbol period for TE81 slow timing
   reg_agcctrl2: 0x07   # MAX_DVGA_GAIN=00 (all gains), MAX_LNA_GAIN=000 (max), MAGN_TARGET=42dB
   reg_agcctrl1: 0x00   # AGC_LNA_PRIORITY=0, faster LNA gain settling
   reg_agcctrl0: 0x92   # HYST_LEVEL=10(medium), FILTER_LENGTH=10(16 OOK samples, was 8)
@@ -125,10 +125,10 @@ remote_receiver:
         open_drain: false
     dump:
       - dooya
-    idle: 10ms   # Nexus inter-frame gap is 6-9ms with CC1101 OOK stretch; 10ms keeps frames in one buffer
+    idle: 10ms   # TE81 inter-frame gap is 6-9ms with CC1101 OOK stretch; 10ms keeps frames in one buffer
     filter: 100us
-    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/Nexus use direct array access
-    buffer_size: 8kb   # 12 Nexus frames × ~73 elements ≈ 3.5kb, plus Dooya/A-OK
+    tolerance: 40%  # built-in Dooya decoder needs wider tolerance; custom A-OK/TE81 use direct array access
+    buffer_size: 8kb   # 12 TE81 frames × ~73 elements ≈ 3.5kb, plus Dooya/A-OK
 
 # ─── Remote Transmitter (CC1101 GDO0 shared) ──────────────────────────────
 remote_transmitter:
@@ -219,7 +219,7 @@ rf433_gw:
         - light.turn_off: pergola_light
 
   # ── Solight TE81 RX → HA senzory ───────────────────────────────────────
-  on_nexus:
+  on_te81:
     - then:
         - lambda: |-
             id(te81_temperature).publish_state(x.temperature);
