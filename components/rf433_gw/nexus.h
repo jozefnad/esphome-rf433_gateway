@@ -32,12 +32,13 @@ struct NexusData {
 // Total buffer: ~90-92 elements for a complete frame.
 //
 // Data format (40 bits, MSB first):
-//   [id:8][flags:4][temp:12][unknown:4][humidity:8][extra:4]
+//   [id:8][flags:4][seq:4][temp:12][humidity_BCD:8][check:4]
 //   - id: random on battery change
-//   - flags: battery/channel/mode bits (variable between TXes)
-//   - temp: 12-bit signed, value/10 = °C
+//   - flags: channel/battery/mode bits (variable between TXes)
+//   - seq: sequence/rolling nibble (not data, changes each TX burst)
+//   - temp: 12-bit raw ADC value, formula: (raw - 1221) / 18.0 = °C
 //   - humidity: BCD encoded (0x72 = 72%)
-//   - extra: checksum or padding
+//   - check: checksum or padding (always 0x1 observed)
 // Decoder uses direct raw-array access for speed on single-core ESP32-C3.
 
 // ─── TE81 Protocol (RX-only decoder) — header-only ─────────────────────────
@@ -100,13 +101,13 @@ class NexusProtocol {
     ESP_LOGD(TAG_NEXUS, "decoded 40 bits: 0x%010" PRIx64, bits);
 
     // ── Extract fields from 40-bit frame ─────────────────────────────────
-    // [id:8][flags:4][temp:12][nibble_x:4][humidity:8][extra:4]
+    // [id:8][flags:4][seq:4][temp:12][humidity_BCD:8][check:4]
     uint8_t  b_id    = (bits >> 32) & 0xFF;
     uint8_t  b_flags = (bits >> 28) & 0x0F;
-    uint16_t temp_raw = (bits >> 16) & 0xFFF;
-    uint8_t  nib_x   = (bits >> 12) & 0x0F;
+    uint8_t  b_seq   = (bits >> 24) & 0x0F;
+    uint16_t temp_raw = (bits >> 12) & 0xFFF;  // 12-bit ADC: bits[23:12]
     uint8_t  hum_raw = (bits >> 4) & 0xFF;
-    uint8_t  extra   = bits & 0x0F;
+    uint8_t  b_check = bits & 0x0F;
 
     // Reject all-zeros or all-ones ID
     if (b_id == 0 || b_id == 0xFF) {
@@ -117,14 +118,14 @@ class NexusProtocol {
     NexusData data;
     data.id = b_id;
 
-    // Channel: try lower 2 bits of flags (standard Nexus mapping)
+    // Channel: lower 2 bits of flags (standard mapping)
     data.channel    = (b_flags & 0x03) + 1;
     data.battery_ok = (b_flags >> 3) & 1;
     data.test_mode  = (b_flags >> 2) & 1;
 
-    // Temperature: 12-bit signed, divided by 10
-    int16_t temp_signed = (int16_t)(temp_raw << 4) >> 4;
-    data.temperature = temp_signed / 10.0f;
+    // Temperature: 12-bit raw ADC, empirical formula from 7 calibration points
+    // (raw - 1221) / 18.0 = °C, R²=0.9999, max error ±0.06°C
+    data.temperature = (temp_raw - 1221) / 18.0f;
 
     // Humidity: try BCD decode first (0x72 → 72), fallback to raw
     uint8_t hum_bcd = ((hum_raw >> 4) & 0x0F) * 10 + (hum_raw & 0x0F);
@@ -144,8 +145,9 @@ class NexusProtocol {
       return {};
     }
 
-    ESP_LOGD(TAG_NEXUS, "parsed: id=0x%02X flags=0x%X temp_raw=0x%03X(%d) nib=0x%X hum_raw=0x%02X extra=0x%X",
-             b_id, b_flags, temp_raw, temp_signed, nib_x, hum_raw, extra);
+    ESP_LOGD(TAG_NEXUS, "parsed: id=0x%02X flags=0x%X seq=0x%X temp_raw=%d(0x%03X) hum_raw=0x%02X chk=0x%X -> %.1f°C %d%%",
+             b_id, b_flags, b_seq, temp_raw, temp_raw, hum_raw, b_check,
+             data.temperature, data.humidity);
 
     return data;
   }
