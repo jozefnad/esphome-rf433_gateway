@@ -60,8 +60,12 @@ class RF433GWReceiver : public Component,
                         public remote_base::RemoteReceiverListener {
  public:
   bool on_receive(remote_base::RemoteReceiveData src) override {
-    // Self-reception protection
+    // Self-reception protection. The shared GDO0 receiver records our own frames
+    // while transmitting, but only decodes them after the idle gap has elapsed —
+    // i.e. after perform() already returned. A lockout window is therefore needed
+    // on top of the plain flag, otherwise the echo re-triggers on_aok automations.
     if (is_transmitting_) return false;
+    if (tx_end_ms_ != 0 && (millis() - tx_end_ms_) < tx_lockout_ms_) return false;
 
     // Quick size check — skip tiny buffers (noise)
     int32_t buf_size = src.size();
@@ -129,9 +133,11 @@ class RF433GWReceiver : public Component,
 
   void set_transmitting(bool v) {
     is_transmitting_ = v;
+    if (!v) this->tx_end_ms_ = millis();
     ESP_LOGD(TAG_GW, "set_transmitting(%s)", v ? "true" : "false");
   }
   void set_debounce(uint32_t ms) { debounce_ms_ = ms; }
+  void set_tx_lockout(uint32_t ms) { tx_lockout_ms_ = ms; }
 
   void add_aok_trigger(AOKTrigger *t) { aok_triggers_.push_back(t); }
   void add_te81_trigger(SolightTE81Trigger *t) { te81_triggers_.push_back(t); }
@@ -141,6 +147,8 @@ class RF433GWReceiver : public Component,
   std::vector<SolightTE81Trigger *> te81_triggers_;
   bool is_transmitting_{false};
   uint32_t debounce_ms_{500};
+  uint32_t tx_end_ms_{0};
+  uint32_t tx_lockout_ms_{1000};
 
   // A-OK debounce state
   uint32_t last_aok_remote_id_{0};

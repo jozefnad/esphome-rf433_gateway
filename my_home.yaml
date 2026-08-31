@@ -35,6 +35,13 @@ substitutions:
   # A-OK remote ID (AC136-04 ovládač)
   aok_id: "0xD3F5D3"
 
+# ─── RF echo filter ────────────────────────────────────────────────────────
+# RX aj TX zdieľajú GDO0, takže prijímač dekóduje aj vlastné vysielanie.
+# Bez tohto filtra by echo znovu spustilo on_press → cover.open/close a
+# prepísalo by cieľovú pozíciu (napr. 17 % → 0 %), takže roleta ide až na doraz.
+.rf_echo_filter: &rf_echo_filter
+  - lambda: 'if (millis() - id(rf_last_tx_ms) < 1000) return {}; return x;'
+
 # ─── Networking ────────────────────────────────────────────────────────────
 esp32_ble_tracker:
   scan_parameters:
@@ -145,10 +152,14 @@ remote_transmitter:
     non_blocking: false
     on_transmit:
       then:
-        - lambda: 'id(mycc1101).xmit();'
+        - lambda: |-
+            id(mycc1101).xmit();
+            id(rf_last_tx_ms) = millis();
     on_complete:
       then:
-        - lambda: 'id(mycc1101).recv();'
+        - lambda: |-
+            id(mycc1101).recv();
+            id(rf_last_tx_ms) = millis();
 
 # ─── RF433 Gateway Component ──────────────────────────────────────────────
 external_components:
@@ -237,6 +248,7 @@ binary_sensor:
       button: 0
       check: 0
     filters:
+      - lambda: 'if (millis() - id(rf_last_tx_ms) < 1000) return {}; return x;'
       - delayed_off: 100ms
 
   # Kanál 0 — Všetky rolety
@@ -248,6 +260,7 @@ binary_sensor:
       channel: 0
       button: 1
       check: 1
+    filters: *rf_echo_filter
     on_press:
       - cover.open: all_blinds
 
@@ -259,6 +272,7 @@ binary_sensor:
       channel: 0
       button: 3
       check: 3
+    filters: *rf_echo_filter
     on_press:
       - cover.close: all_blinds
 
@@ -270,6 +284,7 @@ binary_sensor:
       channel: 0
       button: 5
       check: 5
+    filters: *rf_echo_filter
     on_press:
       - cover.stop: all_blinds
 
@@ -282,6 +297,7 @@ binary_sensor:
       channel: 1
       button: 1
       check: 1
+    filters: *rf_echo_filter
     on_press:
       - cover.open: blind_1
 
@@ -293,6 +309,7 @@ binary_sensor:
       channel: 1
       button: 3
       check: 3
+    filters: *rf_echo_filter
     on_press:
       - cover.close: blind_1
 
@@ -304,6 +321,7 @@ binary_sensor:
       channel: 1
       button: 5
       check: 5
+    filters: *rf_echo_filter
     on_press:
       - cover.stop: blind_1
 
@@ -316,6 +334,7 @@ binary_sensor:
       channel: 2
       button: 1
       check: 1
+    filters: *rf_echo_filter
     on_press:
       - cover.open: blind_2
 
@@ -327,6 +346,7 @@ binary_sensor:
       channel: 2
       button: 3
       check: 3
+    filters: *rf_echo_filter
     on_press:
       - cover.close: blind_2
 
@@ -338,6 +358,7 @@ binary_sensor:
       channel: 2
       button: 5
       check: 5
+    filters: *rf_echo_filter
     on_press:
       - cover.stop: blind_2
 
@@ -350,6 +371,7 @@ binary_sensor:
       channel: 3
       button: 1
       check: 1
+    filters: *rf_echo_filter
     on_press:
       - cover.open: blind_3
 
@@ -361,6 +383,7 @@ binary_sensor:
       channel: 3
       button: 3
       check: 3
+    filters: *rf_echo_filter
     on_press:
       - cover.close: blind_3
 
@@ -372,6 +395,7 @@ binary_sensor:
       channel: 3
       button: 5
       check: 5
+    filters: *rf_echo_filter
     on_press:
       - cover.stop: blind_3
 
@@ -435,9 +459,6 @@ cover:
           auto duration = id(global_blind_duration) * 1000;
           id(all_blinds).set_open_duration(duration);
           id(all_blinds).set_close_duration(duration);
-      - script.execute:
-          id: dooya_open
-          channel: 0
       - cover.open: blind_1
       - cover.open: blind_2
       - cover.open: blind_3
@@ -446,16 +467,10 @@ cover:
           auto duration = id(global_blind_duration) * 1000;
           id(all_blinds).set_open_duration(duration);
           id(all_blinds).set_close_duration(duration);
-      - script.execute:
-          id: dooya_close
-          channel: 0
       - cover.close: blind_1
       - cover.close: blind_2
       - cover.close: blind_3
     stop_action:
-      - script.execute:
-          id: dooya_stop
-          channel: 0
       - cover.stop: blind_1
       - cover.stop: blind_2
       - cover.stop: blind_3
@@ -554,6 +569,8 @@ cover:
 # UP/DOWN: 3× check1 + 4× check2, STOP: 3× check
 script:
   - id: dooya_open
+    mode: queued
+    max_runs: 8
     parameters:
       channel: int
     then:
@@ -577,6 +594,8 @@ script:
                 check: 14
 
   - id: dooya_close
+    mode: queued
+    max_runs: 8
     parameters:
       channel: int
     then:
@@ -600,6 +619,8 @@ script:
                 check: 12
 
   - id: dooya_stop
+    mode: queued
+    max_runs: 8
     parameters:
       channel: int
     then:
@@ -651,6 +672,12 @@ output:
 
 # ─── Globálne premenné ────────────────────────────────────────────────────
 globals:
+  # Čas posledného RF vysielania — používa sa na potlačenie vlastného echa na RX.
+  - id: rf_last_tx_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
   - id: global_blind_duration
     type: float
     restore_value: yes
