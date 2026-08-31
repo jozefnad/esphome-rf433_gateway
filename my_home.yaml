@@ -34,6 +34,7 @@ substitutions:
 
   # A-OK remote ID (AC136-04 ovládač)
   aok_id: "0xD3F5D3"
+  aok_id_2: "0xD3F611"
 
 # ─── RF echo filter ────────────────────────────────────────────────────────
 # RX aj TX zdieľajú GDO0, takže prijímač dekóduje aj vlastné vysielanie.
@@ -180,51 +181,51 @@ rf433_gw:
   # ── A-OK RX: ovládač → HA synchronizácia ──────────────────────────────
   on_aok:
     # Pergola hore
-    - remote_id: 0xD3F5D3
+    - remote_id: $aok_id
       command: UP
       then:
         - cover.open: pergola_roof
-    - remote_id: 0xD3F611
+    - remote_id: $aok_id_2
       command: UP
       then:
         - cover.open: pergola_roof
 
     # Pergola dole
-    - remote_id: 0xD3F5D3
+    - remote_id: $aok_id
       command: DOWN
       then:
         - cover.close: pergola_roof
-    - remote_id: 0xD3F611
+    - remote_id: $aok_id_2
       command: DOWN
       then:
         - cover.close: pergola_roof
 
     # Pergola stop
-    - remote_id: 0xD3F5D3
+    - remote_id: $aok_id
       command: STOP
       then:
         - cover.stop: pergola_roof
-    - remote_id: 0xD3F611
+    - remote_id: $aok_id_2
       command: STOP
       then:
         - cover.stop: pergola_roof
 
     # Pergola svetlo zapnúť
-    - remote_id: 0xD3F5D3
+    - remote_id: $aok_id
       command: LIGHT_ON
       then:
         - light.turn_on: pergola_light
-    - remote_id: 0xD3F611
+    - remote_id: $aok_id_2
       command: LIGHT_ON
       then:
         - light.turn_on: pergola_light
 
     # Pergola svetlo vypnúť
-    - remote_id: 0xD3F5D3
+    - remote_id: $aok_id
       command: LIGHT_OFF
       then:
         - light.turn_off: pergola_light
-    - remote_id: 0xD3F611
+    - remote_id: $aok_id_2
       command: LIGHT_OFF
       then:
         - light.turn_off: pergola_light
@@ -238,25 +239,13 @@ rf433_gw:
 
 # ─── Dooya RX: fyzický ovládač → HA synchronizácia ────────────────────────
 binary_sensor:
-  # Wildcard senzor pre diagnostiku
-  - platform: remote_receiver
-    name: "Dooya Akýkoľvek Paket"
-    internal: false
-    dooya:
-      id: 0x00000000
-      channel: 0
-      button: 0
-      check: 0
-    filters:
-      - lambda: 'if (millis() - id(rf_last_tx_ms) < 1000) return {}; return x;'
-      - delayed_off: 100ms
 
   # Kanál 0 — Všetky rolety
   - platform: remote_receiver
     name: "Ovládač Všetky - Hore"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 0
       button: 1
       check: 1
@@ -268,7 +257,7 @@ binary_sensor:
     name: "Ovládač Všetky - Dole"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 0
       button: 3
       check: 3
@@ -280,7 +269,7 @@ binary_sensor:
     name: "Ovládač Všetky - Stop"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 0
       button: 5
       check: 5
@@ -293,7 +282,7 @@ binary_sensor:
     name: "Ovládač Roleta 1 - Hore"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 1
       button: 1
       check: 1
@@ -305,7 +294,7 @@ binary_sensor:
     name: "Ovládač Roleta 1 - Dole"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 1
       button: 3
       check: 3
@@ -317,7 +306,7 @@ binary_sensor:
     name: "Ovládač Roleta 1 - Stop"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 1
       button: 5
       check: 5
@@ -330,7 +319,7 @@ binary_sensor:
     name: "Ovládač Roleta 2 - Hore"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 2
       button: 1
       check: 1
@@ -342,7 +331,7 @@ binary_sensor:
     name: "Ovládač Roleta 2 - Dole"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 2
       button: 3
       check: 3
@@ -354,7 +343,7 @@ binary_sensor:
     name: "Ovládač Roleta 2 - Stop"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 2
       button: 5
       check: 5
@@ -367,7 +356,7 @@ binary_sensor:
     name: "Ovládač Roleta 3 - Hore"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 3
       button: 1
       check: 1
@@ -379,7 +368,7 @@ binary_sensor:
     name: "Ovládač Roleta 3 - Dole"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 3
       button: 3
       check: 3
@@ -391,7 +380,7 @@ binary_sensor:
     name: "Ovládač Roleta 3 - Stop"
     internal: true
     dooya:
-      id: 0x00BB6A83
+      id: $dooya_id
       channel: 3
       button: 5
       check: 5
@@ -415,7 +404,7 @@ cover:
       - rf433_gw.transmit_aok:
           transmitter_id: rf_transmitter
           receiver_id: rf_gw
-          remote_id: 0xD3F5D3
+          remote_id: $aok_id
           address: 0x0100       # Kanál 9 (1 << 8)
           command: UP
           repeat:
@@ -429,7 +418,7 @@ cover:
       - rf433_gw.transmit_aok:
           transmitter_id: rf_transmitter
           receiver_id: rf_gw
-          remote_id: 0xD3F5D3
+          remote_id: $aok_id
           address: 0x0100
           command: DOWN
           repeat:
@@ -439,7 +428,7 @@ cover:
       - rf433_gw.transmit_aok:
           transmitter_id: rf_transmitter
           receiver_id: rf_gw
-          remote_id: 0xD3F5D3
+          remote_id: $aok_id
           address: 0x0100
           command: STOP
           repeat:
@@ -579,7 +568,7 @@ script:
           then:
             - remote_transmitter.transmit_dooya:
                 transmitter_id: rf_transmitter
-                id: 0x00BB6A83
+                id: $dooya_id
                 channel: !lambda 'return channel;'
                 button: 1
                 check: 1
@@ -588,7 +577,7 @@ script:
           then:
             - remote_transmitter.transmit_dooya:
                 transmitter_id: rf_transmitter
-                id: 0x00BB6A83
+                id: $dooya_id
                 channel: !lambda 'return channel;'
                 button: 1
                 check: 14
@@ -604,7 +593,7 @@ script:
           then:
             - remote_transmitter.transmit_dooya:
                 transmitter_id: rf_transmitter
-                id: 0x00BB6A83
+                id: $dooya_id
                 channel: !lambda 'return channel;'
                 button: 3
                 check: 3
@@ -613,7 +602,7 @@ script:
           then:
             - remote_transmitter.transmit_dooya:
                 transmitter_id: rf_transmitter
-                id: 0x00BB6A83
+                id: $dooya_id
                 channel: !lambda 'return channel;'
                 button: 3
                 check: 12
@@ -629,7 +618,7 @@ script:
           then:
             - remote_transmitter.transmit_dooya:
                 transmitter_id: rf_transmitter
-                id: 0x00BB6A83
+                id: $dooya_id
                 channel: !lambda 'return channel;'
                 button: 5
                 check: 5
@@ -653,7 +642,7 @@ output:
             - rf433_gw.transmit_aok:
                 transmitter_id: rf_transmitter
                 receiver_id: rf_gw
-                remote_id: 0xD3F5D3
+                remote_id: $aok_id
                 address: 0x0100
                 command: LIGHT_ON
                 repeat:
@@ -663,7 +652,7 @@ output:
             - rf433_gw.transmit_aok:
                 transmitter_id: rf_transmitter
                 receiver_id: rf_gw
-                remote_id: 0xD3F5D3
+                remote_id: $aok_id
                 address: 0x0100
                 command: LIGHT_OFF
                 repeat:
